@@ -74,25 +74,28 @@ class Packet:
         Convert packet to binary format suitable for network transmission.
         
         Binary packet structure (64 bytes header + payload):
-        - Bytes 0-7:   Magic number (0xACCL) + version (0x01) + reserved
-        - Bytes 8-11:  Packet type (4 bytes)
-        - Bytes 12-15: Operation type (4 bytes)
-        - Bytes 16-19: Source rank (4 bytes)
-        - Bytes 20-23: Destination rank (4 bytes)
-        - Bytes 24-27: Tag (4 bytes)
-        - Bytes 28-31: Session ID (4 bytes)
-        - Bytes 32-35: Sequence number (4 bytes)
-        - Bytes 36-39: Data length (4 bytes)
-        - Bytes 40-43: Timestamp (4 bytes)
-        - Bytes 44-47: Flags (compression, host_memory, etc.)
-        - Bytes 48-55: Address (8 bytes)
-        - Bytes 56-57: Payload segment (2 bytes)
-        - Bytes 58-59: Total segments (2 bytes)
+        - Bytes 0-1:   Protocol number (0xACCE) 
+        - Bytes 2-3:   Version (0x0001)
+        - Bytes 4-7:   Packet type (4 bytes)
+        - Bytes 8-11:  Operation type (4 bytes)
+        - Bytes 12-15: Source rank (4 bytes)
+        - Bytes 16-19: Destination rank (4 bytes)
+        - Bytes 20-23: Tag (4 bytes)
+        - Bytes 24-27: Session ID (4 bytes)
+        - Bytes 28-31: Sequence number (4 bytes)
+        - Bytes 32-35: Data length (4 bytes)
+        - Bytes 36-39: Timestamp (4 bytes)
+        - Bytes 40-43: Flags (compression, host_memory, etc.)
+        - Bytes 44-51: Address (8 bytes)
+        - Bytes 52-55: Payload segment (4 bytes)
+        - Bytes 56-59: Total segments (4 bytes)
         - Bytes 60-63: Checksum (4 bytes)
         - Bytes 64+:   Payload data (data_length bytes)
+        
+        Total header: exactly 64 bytes (matching DATAPATH_WIDTH_BYTES)
         """
         # Create header
-        magic = 0xACCE  # ACCE (ACCL communication)
+        protocol_number = 0xACCE  # ACCE (ACCL communication)
         version = 0x01
         reserved = 0x00
         
@@ -106,13 +109,12 @@ class Packet:
             flags |= (1 << 0)  # Bit 0: host memory
         flags |= ((self.compression & 0x0F) << 4)  # Bits 4-7: compression
         
-        # Pack header (64 bytes)
+        # Pack header (60 bytes) + 4 bytes padding = 64 bytes total
+        # Format: HH (4) + IIIIIIIIII (40) + Q (8) + III (12) = 64 bytes!
         header = struct.pack(
-            '>HHBBIIIIIIIIQQHHHI',  # Big-endian format
-            magic,                    # 2 bytes: magic number
-            version,                  # 2 bytes: version (split as 1+1+2)
-            reserved,                 # 1 byte: reserved
-            reserved,                 # 1 byte: reserved
+            '>HHIIIIIIIIIIQIII',  # Big-endian format (64 bytes exactly!)
+            protocol_number,          # 2 bytes: protocol number
+            version,                  # 2 bytes: version
             ptype,                    # 4 bytes: packet type
             optype,                   # 4 bytes: operation
             self.src_rank,            # 4 bytes: source rank
@@ -121,13 +123,12 @@ class Packet:
             self.session_id,          # 4 bytes: session ID
             self.sequence_number,     # 4 bytes: sequence number
             self.data_length,         # 4 bytes: data length
-            self.timestamp & 0xFFFFFFFF,  # 4 bytes: timestamp (lower 32 bits)
+            self.timestamp & 0xFFFFFFFF,  # 4 bytes: timestamp
             flags,                    # 4 bytes: flags
-            self.address,             # 8 bytes: address (first Q)
-            0,                        # 8 bytes: reserved (second Q)
-            self.payload_segment,     # 2 bytes: segment
-            self.total_segments,      # 2 bytes: total segments
-            0                         # 4 bytes: checksum (computed below)
+            self.address,             # 8 bytes: address
+            self.payload_segment,     # 4 bytes: segment
+            self.total_segments,      # 4 bytes: total segments
+            0                         # 4 bytes: checksum placeholder
         )
         
         # Generate payload (random data for simulation)
@@ -137,16 +138,16 @@ class Packet:
         checksum = sum(header) + sum(payload)
         checksum = checksum & 0xFFFFFFFF
         
-        # Re-pack header with checksum
+        # Re-pack header with checksum (exactly 64 bytes)
         header = struct.pack(
-            '>HHBBIIIIIIIIQQHHHI',
-            magic, version, reserved, reserved,
+            '>HHIIIIIIIIIIQIII',
+            protocol_number, version,
             ptype, optype,
             self.src_rank, self.dst_rank,
             self.tag, self.session_id,
             self.sequence_number, self.data_length,
             self.timestamp & 0xFFFFFFFF, flags,
-            self.address, 0,
+            self.address,
             self.payload_segment, self.total_segments,
             checksum
         )
@@ -384,9 +385,14 @@ class ACCLTraceGenerator:
                 self.advance_time(seg_size // 32)
         else:
             # Rendezvous broadcast - address exchange then RDMA
+            # Store addresses for each destination
+            dest_addresses = {}
+            
+            # Phase 1: Each destination sends its buffer address to root
             for dst in range(self.num_ranks):
                 if dst != root:
-                    address = random.randint(0x1000000, 0xFFFFFFFF) << 32
+                    address = random.randint(0x1000000, 0xFFFFFFFF) << 32 | random.randint(0, 0xFFFFFFFF)
+                    dest_addresses[dst] = address  # Store for later use
                     
                     # Address packet from dst to root
                     self.advance_time(20)
@@ -406,10 +412,9 @@ class ACCLTraceGenerator:
                     )
                     packets.append(addr_packet)
             
-            # Root sends RDMA to all
+            # Phase 2: Root sends RDMA data to all destinations using their addresses
             for dst in range(self.num_ranks):
                 if dst != root:
-                    address = random.randint(0x1000000, 0xFFFFFFFF) << 32
                     self.advance_time(30)
                     
                     rdma_packet = Packet(
@@ -424,7 +429,7 @@ class ACCLTraceGenerator:
                         data_length=size,
                         compression=0,
                         is_host_memory=False,
-                        address=address
+                        address=dest_addresses[dst]  # Use the stored address!
                     )
                     packets.append(rdma_packet)
         
@@ -755,23 +760,32 @@ class ACCLTraceGenerator:
 
 def main():
     """Main function to generate packet trace"""
+    import os
+    
     # Configuration
     NUM_RANKS = 8
     NUM_OPERATIONS = 50
-    OUTPUT_FILE = "accl_packet_trace.txt"
-    OUTPUT_HEX_RAW_FILE = "accl_packets_raw_hex.txt"
-    OUTPUT_HEX_DETAILED_FILE = "accl_packets_hex_detailed.txt"
-    OUTPUT_BIN_FILE = "accl_packet_trace.bin"
+    
+    # Create output directories
+    OUTPUT_DIR_ALL = "output_all_nodes"
+    OUTPUT_DIR_NODE = "output_single_node"
+    
+    os.makedirs(OUTPUT_DIR_ALL, exist_ok=True)
+    os.makedirs(OUTPUT_DIR_NODE, exist_ok=True)
+    
+    # Define output files with directory paths
+    OUTPUT_FILE = os.path.join(OUTPUT_DIR_ALL, "accl_packet_trace.txt")
+    OUTPUT_HEX_RAW_FILE = os.path.join(OUTPUT_DIR_ALL, "accl_packets_raw_hex.txt")
+    OUTPUT_HEX_DETAILED_FILE = os.path.join(OUTPUT_DIR_ALL, "accl_packets_hex_detailed.txt")
+    OUTPUT_BIN_FILE = os.path.join(OUTPUT_DIR_ALL, "accl_packet_trace.bin")
     
     print(f"ACCL Packet Trace Generator")
     print(f"=" * 80)
     print(f"Configuration:")
     print(f"  Number of ranks: {NUM_RANKS}")
     print(f"  Number of operations: {NUM_OPERATIONS}")
-    print(f"  Output file (human-readable): {OUTPUT_FILE}")
-    print(f"  Output file (hex raw): {OUTPUT_HEX_RAW_FILE}")
-    print(f"  Output file (hex detailed): {OUTPUT_HEX_DETAILED_FILE}")
-    print(f"  Output file (binary): {OUTPUT_BIN_FILE}")
+    print(f"  Output directory (all nodes): {OUTPUT_DIR_ALL}/")
+    print(f"  Output directory (single node): {OUTPUT_DIR_NODE}/")
     print(f"=" * 80)
     print()
     
@@ -862,7 +876,7 @@ def main():
         f.write("=" * 100 + "\n")
         f.write("\n")
         f.write("Packet Binary Structure (64-byte header + payload):\n")
-        f.write("  Offset 0-1:   Magic number (0xACCE)\n")
+        f.write("  Offset 0-1:   Protocol number (0xACCE)\n")
         f.write("  Offset 2-3:   Version (0x01) + reserved\n")
         f.write("  Offset 4-7:   Packet type\n")
         f.write("  Offset 8-11:  Operation type\n")
@@ -895,7 +909,7 @@ def main():
             
             f.write("Header Breakdown (64 bytes):\n")
             f.write("-" * 100 + "\n")
-            f.write(f"  Magic Number:       {binary_data[0:2].hex():20s}  (bytes 0-1)\n")
+            f.write(f"  Protocol Number:    {binary_data[0:2].hex():20s}  (bytes 0-1)\n")
             f.write(f"  Version/Reserved:   {binary_data[2:4].hex():20s}  (bytes 2-3)\n")
             f.write(f"  Packet Type:        {binary_data[4:8].hex():20s}  (bytes 4-7)\n")
             f.write(f"  Operation:          {binary_data[8:12].hex():20s}  (bytes 8-11)\n")
@@ -934,7 +948,7 @@ def main():
     with open(OUTPUT_BIN_FILE, 'wb') as f:
         # Write header
         header = struct.pack('>4sIII', 
-                           b'ACCL',           # Magic
+                           b'ACCL',           # Protocol identifier
                            1,                 # Version
                            NUM_RANKS,         # Number of ranks
                            len(packets))      # Number of packets
@@ -944,23 +958,158 @@ def main():
         for packet in packets:
             f.write(packet.to_binary())
     
-    print(f"Trace generation complete!")
-    print(f"Generated {len(packets)} packets")
-    print(f"Output files created:")
-    print(f"  - {OUTPUT_FILE} (human-readable)")
-    print(f"  - {OUTPUT_HEX_RAW_FILE} (raw hex - ready for encapsulation)")
-    print(f"  - {OUTPUT_HEX_DETAILED_FILE} (detailed hex with breakdown)")
-    print(f"  - {OUTPUT_BIN_FILE} (binary)")
+    # Generate per-node traces for a randomly selected node
+    selected_node = random.randint(0, NUM_RANKS - 1)
+    print(f"\nGenerating per-node trace for randomly selected node: {selected_node}")
+    
+    # Filter packets that involve the selected node (as source or destination)
+    node_packets = [p for p in packets if p.src_rank == selected_node or p.dst_rank == selected_node]
+    
+    # Define per-node output files in the node-specific directory
+    NODE_OUTPUT_FILE = os.path.join(OUTPUT_DIR_NODE, f"accl_packet_trace_node{selected_node}.txt")
+    NODE_OUTPUT_HEX_RAW_FILE = os.path.join(OUTPUT_DIR_NODE, f"accl_packets_raw_hex_node{selected_node}.txt")
+    NODE_OUTPUT_HEX_DETAILED_FILE = os.path.join(OUTPUT_DIR_NODE, f"accl_packets_hex_detailed_node{selected_node}.txt")
+    NODE_OUTPUT_BIN_FILE = os.path.join(OUTPUT_DIR_NODE, f"accl_packet_trace_node{selected_node}.bin")
+    
+    # Write human-readable trace for selected node
+    with open(NODE_OUTPUT_FILE, 'w') as f:
+        f.write("=" * 100 + "\n")
+        f.write(f"ACCL PACKET TRACE FOR NODE {selected_node} (Human-Readable)\n")
+        f.write("=" * 100 + "\n")
+        f.write(f"Configuration:\n")
+        f.write(f"  Selected Node: {selected_node}\n")
+        f.write(f"  Total Network Ranks: {NUM_RANKS}\n")
+        f.write(f"  Total Network Operations: {NUM_OPERATIONS}\n")
+        f.write(f"  Packets involving this node: {len(node_packets)}\n")
+        f.write(f"  Max Packet Size: {generator.MAX_PACKETSIZE} bytes\n")
+        f.write(f"  Datapath Width: {generator.DATAPATH_WIDTH_BYTES} bytes\n")
+        f.write(f"  Eager Threshold: {generator.MAX_EAGER_SIZE} bytes\n")
+        f.write("=" * 100 + "\n")
+        f.write("\n")
+        f.write("Packet Format:\n")
+        f.write("  [T=timestamp] PacketType Operation SRC=src DST=dst TAG=tag SES=session SEQ=seq LEN=length\n")
+        f.write("  Optional: SEG=segment/total ADDR=address [FLAGS]\n")
+        f.write("=" * 100 + "\n")
+        f.write("\n")
+        
+        # Write packets
+        for packet in node_packets:
+            f.write(str(packet) + "\n")
+        
+        f.write("\n")
+        f.write("=" * 100 + "\n")
+        f.write(f"NODE {selected_node} STATISTICS\n")
+        f.write("=" * 100 + "\n")
+        
+        # Calculate statistics
+        stats = {}
+        for packet in node_packets:
+            op = packet.operation.value
+            stats[op] = stats.get(op, 0) + 1
+        
+        f.write(f"Total Packets involving Node {selected_node}: {len(node_packets)}\n")
+        f.write(f"Final Timestamp: {generator.timestamp}\n")
+        f.write(f"\nPackets by Operation:\n")
+        for op, count in sorted(stats.items()):
+            f.write(f"  {op:20s}: {count:5d} packets\n")
+        
+        # Direction statistics
+        sent_packets = [p for p in node_packets if p.src_rank == selected_node]
+        recv_packets = [p for p in node_packets if p.dst_rank == selected_node]
+        
+        f.write(f"\nPackets by Direction:\n")
+        f.write(f"  Sent by node {selected_node:2d}:     {len(sent_packets):5d} packets\n")
+        f.write(f"  Received by node {selected_node:2d}: {len(recv_packets):5d} packets\n")
+        
+        # Data volume
+        total_data = sum(p.data_length for p in node_packets)
+        f.write(f"\nTotal Data Volume: {total_data:,} bytes ({total_data / 1024 / 1024:.2f} MB)\n")
+        
+        f.write("=" * 100 + "\n")
+    
+    # Write raw hex trace for selected node
+    with open(NODE_OUTPUT_HEX_RAW_FILE, 'w') as f:
+        f.write(f"# ACCL Packet Trace for Node {selected_node} - Raw Hexadecimal Format\n")
+        f.write("# Ready for encapsulation in transport/ethernet protocols\n")
+        f.write(f"# Selected node: {selected_node}\n")
+        f.write(f"# Packets involving this node: {len(node_packets)}\n")
+        f.write(f"# Each line represents one complete packet in hexadecimal\n")
+        f.write("#\n")
+        
+        for packet in node_packets:
+            f.write(f"{packet.to_hex()}\n")
+    
+    # Write detailed hex trace for selected node
+    with open(NODE_OUTPUT_HEX_DETAILED_FILE, 'w') as f:
+        f.write("=" * 100 + "\n")
+        f.write(f"ACCL PACKET TRACE FOR NODE {selected_node} (Hexadecimal Format - Detailed)\n")
+        f.write("=" * 100 + "\n")
+        f.write(f"Configuration:\n")
+        f.write(f"  Selected Node: {selected_node}\n")
+        f.write(f"  Total Network Ranks: {NUM_RANKS}\n")
+        f.write(f"  Packets involving this node: {len(node_packets)}\n")
+        f.write(f"  Packet Header Size: 64 bytes\n")
+        f.write("=" * 100 + "\n")
+        f.write("\n")
+        
+        for i, packet in enumerate(node_packets, 1):
+            f.write(f"Packet {i} (TS={packet.timestamp}):\n")
+            f.write(f"  {packet.packet_type.value} | {packet.operation.value} | ")
+            f.write(f"SRC={packet.src_rank} DST={packet.dst_rank} | ")
+            f.write(f"TAG={packet.tag} SES={packet.session_id} SEQ={packet.sequence_number} | ")
+            f.write(f"LEN={packet.data_length}\n")
+            f.write(f"  Hex:\n")
+            f.write(packet.to_hex_formatted(bytes_per_line=16))
+            f.write("\n" + "-" * 100 + "\n")
+    
+    # Write binary trace for selected node
+    with open(NODE_OUTPUT_BIN_FILE, 'wb') as f:
+        # Write header
+        header = struct.pack('>4sIII', 
+                           b'ACCL',              # Protocol identifier
+                           1,                    # Version
+                           NUM_RANKS,            # Number of ranks
+                           len(node_packets))    # Number of packets for this node
+        f.write(header)
+        
+        # Write all packets for this node
+        for packet in node_packets:
+            f.write(packet.to_binary())
+    
+    print(f"\nTrace generation complete!")
+    print(f"=" * 80)
+    print(f"Generated {len(packets)} total packets")
+    print(f"Generated {len(node_packets)} packets for node {selected_node}")
+    print(f"\nOutput directory structure:")
+    print(f"  {OUTPUT_DIR_ALL}/")
+    print(f"    ├── accl_packet_trace.txt (human-readable)")
+    print(f"    ├── accl_packets_raw_hex.txt (raw hex - ready for encapsulation)")
+    print(f"    ├── accl_packets_hex_detailed.txt (detailed hex with breakdown)")
+    print(f"    └── accl_packet_trace.bin (binary)")
+    print(f"  {OUTPUT_DIR_NODE}/")
+    print(f"    ├── accl_packet_trace_node{selected_node}.txt (human-readable)")
+    print(f"    ├── accl_packets_raw_hex_node{selected_node}.txt (raw hex - ready for encapsulation)")
+    print(f"    ├── accl_packets_hex_detailed_node{selected_node}.txt (detailed hex with breakdown)")
+    print(f"    └── accl_packet_trace_node{selected_node}.bin (binary)")
     print()
     
     # Print sample packets
-    print("Sample packets (first 3):")
+    print("Sample packets from full trace (first 3):")
     print("-" * 100)
     for i, packet in enumerate(packets[:3]):
         print(f"\nPacket {i+1}:")
         print(packet)
         print(f"Hex (first 128 bytes): {packet.to_hex()[:256]}...")
     print("-" * 100)
+    
+    if len(node_packets) > 0:
+        print(f"\nSample packets for node {selected_node} (first 3):")
+        print("-" * 100)
+        for i, packet in enumerate(node_packets[:3]):
+            print(f"\nPacket {i+1}:")
+            print(packet)
+            print(f"Hex (first 128 bytes): {packet.to_hex()[:256]}...")
+        print("-" * 100)
 
 
 if __name__ == "__main__":

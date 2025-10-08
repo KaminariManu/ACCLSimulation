@@ -64,7 +64,7 @@ PACKET 1/142
 Description: [T=000000] DATA_EAGER OP=SEND SRC=2 DST=5...
 
 Header Breakdown (64 bytes):
-  Magic Number:       acce                  (bytes 0-1)
+  Protocol Number:    acce                  (bytes 0-1)
   Version/Reserved:   0100                  (bytes 2-3)
   Packet Type:        00000000              (bytes 4-7)
   Operation:          00000000              (bytes 8-11)
@@ -147,7 +147,7 @@ Each packet has a **64-byte header** followed by the **payload**:
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0-1    | 2    | Magic | 0xACCE (ACCL Communication) |
+| 0-1    | 2    | Protocol Number | 0xACCE (ACCL Communication) |
 | 2-3    | 2    | Version | Protocol version (0x0001) |
 | 4-7    | 4    | Packet Type | Type of packet (eager, rendezvous, etc.) |
 | 8-11   | 4    | Operation | ACCL operation (SEND, RECV, BROADCAST, etc.) |
@@ -294,7 +294,7 @@ import struct
 
 def create_pcap_header():
     """Create PCAP global header"""
-    magic = 0xa1b2c3d4
+    protocol_id = 0xa1b2c3d4
     version_major = 2
     version_minor = 4
     thiszone = 0
@@ -302,7 +302,7 @@ def create_pcap_header():
     snaplen = 65535
     network = 1  # Ethernet
     
-    return struct.pack('<IHHIIII', magic, version_major, version_minor, 
+    return struct.pack('<IHHIIII', protocol_id, version_major, version_minor, 
                        thiszone, sigfigs, snaplen, network)
 
 def create_pcap_packet(packet_data, timestamp=0):
@@ -343,7 +343,7 @@ def parse_accl_packet(hex_string):
     # Unpack header (64 bytes)
     header = struct.unpack('>HHBBIIIIIIIIQQHHHI', packet_bytes[0:64])
     
-    magic = header[0]
+    protocol_number = header[0]
     version = header[1]
     packet_type = header[4]
     operation = header[5]
@@ -364,7 +364,7 @@ def parse_accl_packet(hex_string):
     payload = packet_bytes[64:64+data_len]
     
     return {
-        'magic': hex(magic),
+        'protocol_number': hex(protocol_number),
         'version': version,
         'packet_type': packet_type,
         'operation': operation,
@@ -482,7 +482,7 @@ The trace file includes:
 ## Important Notes
 
 - **Byte Order**: All multi-byte fields use **big-endian** (network byte order)
-- **Magic Number**: `0xACCE` identifies ACCL packets
+- **Protocol Number**: `0xACCE` identifies ACCL packets
 - **Checksum**: Calculated as sum of all header+payload bytes mod 2³²
 - **Payload Data**: Randomly generated for simulation purposes
 - **Timestamps**: Simulated based on packet size and transfer time
