@@ -1,0 +1,29 @@
+# C Build artifacts
+*.o
+*.obj
+*.exe
+*.out
+
+# Python compiled files
+__pycache__/
+*.pyc
+
+# Packet trace output directories
+PacketTraceGenerator/output_all_nodes/
+PacketTraceGenerator/output_single_node/
+
+# Backup and temporary files
+*.bak
+*~
+*.swp
+*.tmp
+
+# IDE files
+.vscode/
+.vs/
+.idea/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini

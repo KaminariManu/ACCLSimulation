@@ -37,7 +37,7 @@ When you run the generator, it creates **4 output files**:
 [T=001250] DATA_EAGER           OP=SEND            SRC= 3 DST= 5 TAG=  457 SES= 12 SEQ=  23 LEN=  4096 SEG=1/2 [HOST, COMPRESS=0x8]
 ```
 
-### 2. `accl_packets_raw_hex.txt` (Ready for Encapsulation) ⭐
+### 2. `accl_packets_raw_hex.txt` (Ready for Encapsulation)
 - **One packet per line** in pure hexadecimal format
 - No formatting, no descriptions, just hex
 - Ready to be read and encapsulated in transport/link layer protocols
