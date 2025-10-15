@@ -7,11 +7,11 @@ Complete implementation of ACCL (Alveo Collective Communication Library) packet 
 ```
 CodiceElaborato/
 │
-├── � ACCL code/                       # Reference ACCL implementation
-│   ├── ccl_offload_control.c          # Reference ACCL implementation
+├── ACCL code/                          # Reference ACCL implementation from https://github.com/Xilinx/ACCL
+│   ├── ccl_offload_control.c          # Original ACCL hardware implementation
 │   └── ccl_offload_control.h          # Reference ACCL header
 │
-├── 📂 PacketTraceGenerator/            # Python trace generation
+├── PacketTraceGenerator/               # Python trace generation
 │   ├── generate_packet_trace.py       # Main generator script
 │   ├── test_packet.py                 # Verification script
 │   ├── output_all_nodes/              # Complete network traces
@@ -231,7 +231,7 @@ This project is part of an educational assignment for embedded systems.
 
 ## Acknowledgments
 
-Based on the ACCL (Alveo Collective Communication Library) protocol specification.
+This project is based on the ACCL (Alveo Collective Communication Library) protocol specification. The reference ACCL implementation files in the `ACCL code` directory are sourced from the official Xilinx repository: \url{https://github.com/Xilinx/ACCL}.
 
 ---
 
