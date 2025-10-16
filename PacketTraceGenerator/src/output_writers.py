@@ -75,6 +75,11 @@ def write_human_readable(packets: List[Packet], filename: str, generator, num_ra
 
 def write_raw_hex(packets: List[Packet], filename: str):
     """Write raw hex trace to file (ready for encapsulation)"""
+    # Create directory if it doesn't exist
+    dirname = os.path.dirname(filename)
+    if dirname:  # Only create if there's a directory component
+        os.makedirs(dirname, exist_ok=True)
+    
     with open(filename, 'w') as f:
         f.write("# ACCL Packet Trace - Raw Hexadecimal Format\n")
         f.write("# Ready for encapsulation in transport/ethernet protocols\n")
@@ -170,6 +175,11 @@ def write_detailed_hex(packets: List[Packet], filename: str, num_ranks: int, num
 
 def write_binary(packets: List[Packet], filename: str, num_ranks: int):
     """Write binary trace to file"""
+    # Create directory if it doesn't exist
+    dirname = os.path.dirname(filename)
+    if dirname:  # Only create if there's a directory component
+        os.makedirs(dirname, exist_ok=True)
+    
     with open(filename, 'wb') as f:
         # Write header
         header = struct.pack('>4sIII', 

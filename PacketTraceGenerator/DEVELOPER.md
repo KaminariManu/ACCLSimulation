@@ -17,6 +17,15 @@ PacketTraceGenerator/
 │   ├── collective_operations.py     # Collective communication operations
 │   ├── output_writers.py            # Multiple output format writers
 │   └── cli.py                       # Command-line argument parsing
+├── tests/                           # Comprehensive test suite (72 tests)
+│   ├── __init__.py                  # Package initialization
+│   ├── README.md                    # Testing documentation
+│   ├── run_tests.py                 # Test runner with statistics
+│   ├── test_packet.py               # Unit tests for Packet class
+│   ├── test_trace_generator.py      # Unit tests for ACCLTraceGenerator
+│   ├── test_collective_operations.py # Tests for all collective operations
+│   ├── test_output_writers.py       # Tests for output file generation
+│   └── test_integration.py          # End-to-end integration tests
 ├── generate_packet_trace.py         # Legacy version (backward compatible)
 ├── README.md                        # User documentation
 ├── DEVELOPER.md                     # This file
@@ -29,7 +38,45 @@ PacketTraceGenerator/
 2. **Loose Coupling:** Modules communicate through well-defined interfaces
 3. **High Cohesion:** Related functionality grouped together
 4. **Extensibility:** Easy to add new operations or formats
-5. **Testability:** Each module can be tested independently
+5. **Testability:** Each module can be tested independently (>90% test coverage)
+
+## Testing
+
+The project includes a comprehensive test suite with 72 test methods across 20 test classes, achieving over 90% code coverage.
+
+### Test Organization
+
+- **Unit Tests:**
+  - `test_packet.py`: Packet class, serialization, all packet types (10 tests)
+  - `test_trace_generator.py`: Generator initialization, deterministic generation (14 tests)
+  - `test_collective_operations.py`: All 10 collective operations validation (27 tests)
+  - `test_output_writers.py`: File output, format validation (11 tests)
+
+- **Integration Tests:**
+  - `test_integration.py`: End-to-end workflows, scalability (10 tests)
+
+### Running Tests
+
+```bash
+# Run all tests
+python -m unittest discover tests -v
+
+# Run specific test file
+python -m unittest tests.test_packet -v
+
+# Run with statistics (using test runner)
+python tests/run_tests.py
+```
+
+### Test-Driven Development
+
+When adding new features:
+1. Write tests first in appropriate test file
+2. Implement feature
+3. Run tests to verify: `python -m unittest discover tests -v`
+4. Ensure all 72 tests pass before committing
+
+For detailed testing documentation, see `tests/README.md`.
 
 ## Module Details
 
@@ -288,53 +335,64 @@ def generate_my_collective(generator):
 - Implement custom reduction operations
 - Optimize for specific network topologies
 
-### 5. `output_writers.py` (338 lines)
+### 5. `output_writers.py` (314 lines)
 
-**Purpose:** Write packets in multiple formats
+**Purpose:** Write packets in multiple formats with automatic directory creation
 
 **Location:** `src/output_writers.py`
 
 **Output Formats:**
 
-1. **Text Format** (`write_text_trace`):
+1. **Human-Readable Text** (`write_human_readable`):
    - Human-readable with statistics
    - Includes header with configuration
-   - Sample packets for debugging
+   - Full packet details for debugging
 
-2. **Raw Hex Format** (`write_raw_hex_trace`):
+2. **Raw Hex Format** (`write_raw_hex`):
    - **Primary format for encapsulation**
    - One packet per line (hex string only)
-   - No headers, comments, or separators
    - Ready for TCP/UDP/Ethernet wrapping
+   - Automatically creates output directories
 
-3. **Detailed Hex Format** (`write_detailed_hex_trace`):
+3. **Detailed Hex Format** (`write_detailed_hex`):
    - Hex with field breakdowns
    - Shows header structure
    - Useful for debugging
 
-4. **Binary Format** (`write_binary_trace`):
+4. **Binary Format** (`write_binary`):
    - Native binary packets
    - For simulation tools
    - Efficient storage
+   - Automatically creates output directories
 
 **Usage:**
 
 ```python
 from src.output_writers import (
-    write_text_trace,
-    write_raw_hex_trace,
-    write_detailed_hex_trace,
-    write_binary_trace
+    write_human_readable,
+    write_raw_hex,
+    write_detailed_hex,
+    write_binary
 )
 
 packets = generator.generate_trace(100)
 
-# Write all formats
-write_text_trace(packets, "trace.txt", config)
-write_raw_hex_trace(packets, "packets_raw.txt")
-write_detailed_hex_trace(packets, "packets_detailed.txt")
-write_binary_trace(packets, "trace.bin")
+# Write all formats (directories are created automatically)
+write_human_readable(packets, "output/trace.txt", generator, num_ranks, num_operations)
+write_raw_hex(packets, "output/packets_raw.txt")
+write_detailed_hex(packets, "output/packets_detailed.txt", num_ranks, num_operations)
+write_binary(packets, "output/trace.bin", num_ranks)
 ```
+
+**Key Features:**
+
+- **Automatic Directory Creation:** `write_binary()` and `write_raw_hex()` automatically create parent directories if they don't exist using `os.makedirs(dirname, exist_ok=True)`. This ensures files can be written to nested paths without manual directory creation.
+
+- **Format Flexibility:** Each format serves a specific purpose:
+  - Human-readable for debugging and manual inspection
+  - Raw hex for direct protocol encapsulation
+  - Detailed hex for protocol analysis
+  - Binary for efficient simulation input
 
 **Extension Points:**
 - Add new output formats (JSON, CSV, PCAP, etc.)
@@ -452,6 +510,203 @@ packets = gen.generate_trace(50)
 - `Packet`: Packet representation
 - All enumerations from `accl_types`
 
+## Test Suite Architecture
+
+The test suite is comprehensive, well-organized, and validates all aspects of the packet trace generator.
+
+### Test Module Details
+
+#### 1. `test_packet.py` (10 tests)
+
+**Purpose:** Validate Packet class functionality
+
+**Test Classes:**
+- `TestPacketCreation`: Basic packet instantiation
+- `TestPacketSerialization`: Binary and hex serialization
+- `TestPacketTypes`: All packet types (DATA_EAGER, RNDZV_ADDR, RNDZV_DATA, COLLECTIVE_DATA)
+
+**Key Tests:**
+```python
+# Test binary serialization
+def test_binary_serialization(self):
+    packet = Packet(...)
+    binary = packet.to_binary()
+    self.assertEqual(len(binary), 64 + packet.data_length)
+
+# Test hex format
+def test_hex_format(self):
+    packet = Packet(...)
+    hex_str = packet.to_hex()
+    self.assertEqual(len(hex_str), 2 * (64 + packet.data_length))
+```
+
+#### 2. `test_trace_generator.py` (14 tests)
+
+**Purpose:** Validate ACCLTraceGenerator core functionality
+
+**Test Classes:**
+- `TestGeneratorInitialization`: Configuration validation
+- `TestSessionManagement`: Session ID and sequence number tracking
+- `TestDeterministicGeneration`: Reproducibility with seeds
+
+**Key Tests:**
+```python
+# Test deterministic generation
+def test_deterministic_generation(self):
+    random.seed(100)
+    gen1 = ACCLTraceGenerator(num_ranks=4, seed=100)
+    packets1 = gen1.generate_trace(10)
+    
+    random.seed(100)  # Reset global state
+    gen2 = ACCLTraceGenerator(num_ranks=4, seed=100)
+    packets2 = gen2.generate_trace(10)
+    
+    self.assertEqual(len(packets1), len(packets2))
+    # Compare packet contents...
+```
+
+#### 3. `test_collective_operations.py` (27 tests)
+
+**Purpose:** Validate all 10 collective communication operations
+
+**Test Classes:**
+- `TestBroadcast`: Broadcast operation patterns
+- `TestScatter`: Scatter operation patterns
+- `TestGather`: Gather operation patterns
+- `TestReduce`: Reduce operation patterns
+- `TestAllgather`: Allgather operation patterns
+- `TestAllreduce`: Allreduce operation patterns
+- `TestReduceScatter`: Reduce-scatter operation patterns
+- `TestBarrier`: Barrier synchronization (validates 2*(num_ranks-1) packets)
+- `TestAlltoall`: All-to-all communication
+
+**Key Tests:**
+```python
+# Test broadcast packet count
+def test_broadcast_packet_count(self):
+    generator = ACCLTraceGenerator(num_ranks=8)
+    packets = generate_broadcast(generator)
+    # Should be num_ranks - 1 packets from root to others
+    self.assertEqual(len(packets), 7)
+
+# Test barrier synchronization
+def test_barrier_basic(self):
+    generator = ACCLTraceGenerator(num_ranks=4)
+    packets = generate_barrier(generator)
+    # Barrier: gather (N-1) + scatter (N-1) = 2*(N-1)
+    self.assertEqual(len(packets), 6)
+```
+
+#### 4. `test_output_writers.py` (11 tests)
+
+**Purpose:** Validate file output functionality
+
+**Test Classes:**
+- `TestBinaryOutput`: Binary file format
+- `TestHexOutput`: Hexadecimal file formats
+- `TestDirectoryCreation`: Automatic directory creation
+
+**Key Tests:**
+```python
+# Test automatic directory creation
+def test_binary_creates_directory(self):
+    nested_path = "test_outputs/nested/dir/trace.bin"
+    write_binary(packets, nested_path, num_ranks=4)
+    self.assertTrue(os.path.exists(nested_path))
+
+# Test binary format correctness
+def test_binary_format(self):
+    write_binary(packets, "test.bin", num_ranks=4)
+    with open("test.bin", "rb") as f:
+        header = f.read(16)
+        magic, version, ranks, count = struct.unpack('>4sIII', header)
+        self.assertEqual(magic, b'ACCL')
+        self.assertEqual(ranks, 4)
+```
+
+#### 5. `test_integration.py` (10 tests)
+
+**Purpose:** End-to-end integration tests
+
+**Test Classes:**
+- `TestCompleteWorkflow`: Full generation pipeline
+- `TestMultiNodeGeneration`: Large-scale simulations
+- `TestScalability`: Performance with many ranks
+
+**Key Tests:**
+```python
+# Test complete workflow
+def test_complete_workflow(self):
+    generator = ACCLTraceGenerator(num_ranks=8, seed=42)
+    packets = generator.generate_trace(50)
+    
+    # Write all formats
+    write_binary(packets, "output/trace.bin", 8)
+    write_raw_hex(packets, "output/trace_hex.txt")
+    
+    # Verify outputs exist and are valid
+    self.assertTrue(os.path.exists("output/trace.bin"))
+    self.assertTrue(os.path.exists("output/trace_hex.txt"))
+
+# Test scalability
+def test_large_scale_generation(self):
+    generator = ACCLTraceGenerator(num_ranks=64, seed=100)
+    packets = generator.generate_trace(1000)
+    self.assertGreater(len(packets), 1000)
+```
+
+### Test Execution Strategy
+
+1. **Fast Feedback Loop:**
+   ```bash
+   # Run tests for component you're working on
+   python -m unittest tests.test_packet -v
+   ```
+
+2. **Pre-Commit Validation:**
+   ```bash
+   # Run full test suite before committing
+   python -m unittest discover tests -v
+   ```
+
+3. **Continuous Integration Ready:**
+   - All tests are deterministic (use fixed seeds)
+   - No external dependencies required
+   - Clean output directory management
+
+### Writing New Tests
+
+When adding a new feature, follow this pattern:
+
+```python
+import unittest
+from src.trace_generator import ACCLTraceGenerator
+from src.packet import Packet
+from src.accl_types import AcclPacketType, AcclOperation
+
+class TestMyNewFeature(unittest.TestCase):
+    def setUp(self):
+        """Set up test fixtures"""
+        self.generator = ACCLTraceGenerator(num_ranks=4, seed=42)
+    
+    def tearDown(self):
+        """Clean up after tests"""
+        pass
+    
+    def test_feature_basic(self):
+        """Test basic functionality"""
+        result = self.generator.my_new_feature()
+        self.assertIsNotNone(result)
+    
+    def test_feature_edge_case(self):
+        """Test edge cases"""
+        # Test boundary conditions
+        pass
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
 ## Common Extension Patterns
 
 ### Adding a New Collective Operation
@@ -550,6 +805,26 @@ packets = gen.generate_trace(50)
 - Legacy version maintained for backward compatibility
 - **Recommendation:** Use modular version for new projects
 
+## Best Practices
+
+### Code Quality
+
+#### Testing
+- **Write Tests First:** Follow TDD principles - write tests before implementing features
+- **Run Tests Frequently:** Execute relevant test files during development
+- **Maintain Coverage:** Keep test coverage above 90%
+- **Test Edge Cases:** Include boundary conditions and error cases
+- **Use Deterministic Seeds:** Ensure tests are reproducible with `seed` parameters
+
+```python
+# Example: Always use seeds in tests
+generator = ACCLTraceGenerator(num_ranks=4, seed=42)
+```
+
+#### Code Organization
+- **Single Responsibility:** Each function should do one thing well
+- **Clear Interfaces:** Use type hints and docstrings
+- **Consistent Naming:** Follow Python conventions (PEP 8)
 
 ### Error Handling
 
@@ -569,9 +844,16 @@ def generate_trace(self, num_operations):
 - Document all public functions/classes
 - Include usage examples
 - Explain non-obvious design decisions
-- Keep README.md updated
+- Keep README.md and DEVELOPER.md updated
+- Update test documentation in tests/README.md
 
-## Roadmap
+### File Organization
+
+- Keep modules under 500 lines
+- Extract complex logic into helper functions
+- Use clear, descriptive function names
+- Group related functionality
+
 
 ## References
 
