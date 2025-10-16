@@ -43,7 +43,7 @@ The generator models the following ACCL communication operations:
 
 ### 2.2. Output Trace Formats
 
-# Custom configuration
+### Custom configuration
 
 The tool generates four distinct output files, each serving a different purpose:
 
