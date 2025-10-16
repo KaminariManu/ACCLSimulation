@@ -13,6 +13,7 @@ sequencing requirements for collective operations.
 import random
 import sys
 import struct
+import argparse
 from dataclasses import dataclass
 from typing import List, Tuple
 from enum import Enum
@@ -206,17 +207,19 @@ class Packet:
 class ACCLTraceGenerator:
     """Generates ACCL packet traces"""
     
-    def __init__(self, num_ranks: int = 8, seed: int = 42):
+    def __init__(self, num_ranks: int = 8, seed: int = 42, 
+                 max_packet_size: int = 4096, datapath_width: int = 64, 
+                 eager_threshold: int = 32768):
         self.num_ranks = num_ranks
         self.timestamp = 0
         self.session_counters = [0] * num_ranks
         self.sequence_counters = [[0] * num_ranks for _ in range(num_ranks)]
         random.seed(seed)
         
-        # ACCL constants
-        self.MAX_PACKETSIZE = 4096
-        self.DATAPATH_WIDTH_BYTES = 64
-        self.MAX_EAGER_SIZE = 32768  # 32KB
+        # ACCL constants (configurable)
+        self.MAX_PACKETSIZE = max_packet_size
+        self.DATAPATH_WIDTH_BYTES = datapath_width
+        self.MAX_EAGER_SIZE = eager_threshold
         self.TAG_ANY = 0xFFFFFFFF
         
     def get_next_session_id(self, rank: int) -> int:
@@ -435,6 +438,39 @@ class ACCLTraceGenerator:
         
         return packets
     
+    def generate_collective_packet_segments(self, operation: Operation, src: int, dst: int, 
+                                           total_size: int, tag: int, session_id: int) -> List[Packet]:
+        """
+        Helper to generate segmented packets for collective operations.
+        Breaks large data into MAX_PACKETSIZE chunks to match hardware constraints.
+        """
+        packets = []
+        num_segments = (total_size + self.MAX_PACKETSIZE - 1) // self.MAX_PACKETSIZE
+        
+        for seg in range(num_segments):
+            seg_size = min(self.MAX_PACKETSIZE, total_size - seg * self.MAX_PACKETSIZE)
+            seq = self.get_next_sequence(src, dst)
+            
+            packet = Packet(
+                timestamp=self.timestamp,
+                packet_type=PacketType.COLLECTIVE_DATA,
+                operation=operation,
+                src_rank=src,
+                dst_rank=dst,
+                tag=tag,
+                session_id=session_id,
+                sequence_number=seq,
+                data_length=seg_size,
+                compression=0,
+                is_host_memory=False,
+                payload_segment=seg,
+                total_segments=num_segments
+            )
+            packets.append(packet)
+            self.advance_time(seg_size // 64 + 10)
+        
+        return packets
+    
     def generate_scatter(self) -> List[Packet]:
         """Generate scatter packets"""
         packets = []
@@ -442,25 +478,13 @@ class ACCLTraceGenerator:
         chunk_size = random.randint(500, 8000)
         tag = self.TAG_ANY
         
-        # Root sends different chunks to each rank
+        # Root sends different chunks to each rank (segmented if needed)
         for dst in range(self.num_ranks):
             session_id = self.get_next_session_id(root)
-            
-            packet = Packet(
-                timestamp=self.timestamp,
-                packet_type=PacketType.COLLECTIVE_DATA,
-                operation=Operation.SCATTER,
-                src_rank=root,
-                dst_rank=dst,
-                tag=tag,
-                session_id=session_id,
-                sequence_number=self.get_next_sequence(root, dst),
-                data_length=chunk_size,
-                compression=0,
-                is_host_memory=False
+            segments = self.generate_collective_packet_segments(
+                Operation.SCATTER, root, dst, chunk_size, tag, session_id
             )
-            packets.append(packet)
-            self.advance_time(chunk_size // 64 + 20)
+            packets.extend(segments)
         
         return packets
     
@@ -471,26 +495,15 @@ class ACCLTraceGenerator:
         chunk_size = random.randint(500, 8000)
         tag = self.TAG_ANY
         
-        # Ring gather - each rank sends to next, root receives from all
+        # Ring gather - each rank sends to next, root receives from all (segmented)
         for i in range(self.num_ranks):
             if i != root:
                 next_rank = (i + 1) % self.num_ranks
-                
-                packet = Packet(
-                    timestamp=self.timestamp,
-                    packet_type=PacketType.COLLECTIVE_DATA,
-                    operation=Operation.GATHER,
-                    src_rank=i,
-                    dst_rank=next_rank,
-                    tag=tag,
-                    session_id=self.get_next_session_id(i),
-                    sequence_number=self.get_next_sequence(i, next_rank),
-                    data_length=chunk_size,
-                    compression=0,
-                    is_host_memory=False
+                session_id = self.get_next_session_id(i)
+                segments = self.generate_collective_packet_segments(
+                    Operation.GATHER, i, next_rank, chunk_size, tag, session_id
                 )
-                packets.append(packet)
-                self.advance_time(chunk_size // 64 + 15)
+                packets.extend(segments)
         
         return packets
     
@@ -502,28 +515,18 @@ class ACCLTraceGenerator:
         tag = self.TAG_ANY
         func_id = random.randint(0, 5)  # Reduction function ID
         
-        # Ring reduce - each rank reduces and forwards
+        # Ring reduce - each rank reduces and forwards (segmented)
         for i in range(self.num_ranks - 1):
             src = (root + i + 1) % self.num_ranks
             dst = (root + i + 2) % self.num_ranks
             if dst == root:
                 dst = root  # Last one goes to root
             
-            packet = Packet(
-                timestamp=self.timestamp,
-                packet_type=PacketType.COLLECTIVE_DATA,
-                operation=Operation.REDUCE,
-                src_rank=src,
-                dst_rank=dst,
-                tag=tag | (func_id << 16),  # Encode function in tag
-                session_id=self.get_next_session_id(src),
-                sequence_number=self.get_next_sequence(src, dst),
-                data_length=size,
-                compression=0,
-                is_host_memory=False
+            session_id = self.get_next_session_id(src)
+            segments = self.generate_collective_packet_segments(
+                Operation.REDUCE, src, dst, size, tag | (func_id << 16), session_id
             )
-            packets.append(packet)
-            self.advance_time(size // 64 + 30)
+            packets.extend(segments)
         
         return packets
     
@@ -533,29 +536,17 @@ class ACCLTraceGenerator:
         chunk_size = random.randint(500, 8000)
         tag = self.TAG_ANY
         
-        # Ring allgather - P-1 steps, each rank sends and receives
+        # Ring allgather - P-1 steps, each rank sends and receives (segmented)
         for step in range(self.num_ranks - 1):
             for rank in range(self.num_ranks):
                 next_rank = (rank + 1) % self.num_ranks
-                
-                packet = Packet(
-                    timestamp=self.timestamp,
-                    packet_type=PacketType.COLLECTIVE_DATA,
-                    operation=Operation.ALLGATHER,
-                    src_rank=rank,
-                    dst_rank=next_rank,
-                    tag=tag,
-                    session_id=self.get_next_session_id(rank),
-                    sequence_number=self.get_next_sequence(rank, next_rank),
-                    data_length=chunk_size,
-                    compression=0,
-                    is_host_memory=False,
-                    payload_segment=step,
-                    total_segments=self.num_ranks - 1
+                session_id = self.get_next_session_id(rank)
+                segments = self.generate_collective_packet_segments(
+                    Operation.ALLGATHER, rank, next_rank, chunk_size, tag, session_id
                 )
-                packets.append(packet)
+                packets.extend(segments)
             
-            self.advance_time(chunk_size // 64 + 25)
+            self.advance_time(25)
         
         return packets
     
@@ -566,53 +557,31 @@ class ACCLTraceGenerator:
         tag = self.TAG_ANY
         func_id = random.randint(0, 5)
         
-        # Phase 1: Reduce-scatter (P-1 steps)
+        # Phase 1: Reduce-scatter (P-1 steps, segmented)
         for step in range(self.num_ranks - 1):
             for rank in range(self.num_ranks):
                 next_rank = (rank + 1) % self.num_ranks
-                
-                packet = Packet(
-                    timestamp=self.timestamp,
-                    packet_type=PacketType.COLLECTIVE_DATA,
-                    operation=Operation.ALLREDUCE,
-                    src_rank=rank,
-                    dst_rank=next_rank,
-                    tag=tag | (func_id << 16) | (1 << 24),  # Phase 1 marker
-                    session_id=self.get_next_session_id(rank),
-                    sequence_number=self.get_next_sequence(rank, next_rank),
-                    data_length=chunk_size,
-                    compression=0,
-                    is_host_memory=False,
-                    payload_segment=step,
-                    total_segments=(self.num_ranks - 1) * 2
+                session_id = self.get_next_session_id(rank)
+                segments = self.generate_collective_packet_segments(
+                    Operation.ALLREDUCE, rank, next_rank, chunk_size, 
+                    tag | (func_id << 16) | (1 << 24), session_id
                 )
-                packets.append(packet)
+                packets.extend(segments)
             
-            self.advance_time(chunk_size // 64 + 30)
+            self.advance_time(30)
         
-        # Phase 2: Allgather (P-1 steps)
+        # Phase 2: Allgather (P-1 steps, segmented)
         for step in range(self.num_ranks - 1):
             for rank in range(self.num_ranks):
                 next_rank = (rank + 1) % self.num_ranks
-                
-                packet = Packet(
-                    timestamp=self.timestamp,
-                    packet_type=PacketType.COLLECTIVE_DATA,
-                    operation=Operation.ALLREDUCE,
-                    src_rank=rank,
-                    dst_rank=next_rank,
-                    tag=tag | (2 << 24),  # Phase 2 marker
-                    session_id=self.get_next_session_id(rank),
-                    sequence_number=self.get_next_sequence(rank, next_rank),
-                    data_length=chunk_size,
-                    compression=0,
-                    is_host_memory=False,
-                    payload_segment=self.num_ranks - 1 + step,
-                    total_segments=(self.num_ranks - 1) * 2
+                session_id = self.get_next_session_id(rank)
+                segments = self.generate_collective_packet_segments(
+                    Operation.ALLREDUCE, rank, next_rank, chunk_size,
+                    tag | (2 << 24), session_id
                 )
-                packets.append(packet)
+                packets.extend(segments)
             
-            self.advance_time(chunk_size // 64 + 25)
+            self.advance_time(25)
         
         return packets
     
@@ -623,29 +592,18 @@ class ACCLTraceGenerator:
         tag = self.TAG_ANY
         func_id = random.randint(0, 5)
         
-        # Ring reduce-scatter - P-1 steps
+        # Ring reduce-scatter - P-1 steps (segmented)
         for step in range(self.num_ranks - 1):
             for rank in range(self.num_ranks):
                 next_rank = (rank + 1) % self.num_ranks
-                
-                packet = Packet(
-                    timestamp=self.timestamp,
-                    packet_type=PacketType.COLLECTIVE_DATA,
-                    operation=Operation.REDUCE_SCATTER,
-                    src_rank=rank,
-                    dst_rank=next_rank,
-                    tag=tag | (func_id << 16),
-                    session_id=self.get_next_session_id(rank),
-                    sequence_number=self.get_next_sequence(rank, next_rank),
-                    data_length=chunk_size,
-                    compression=0,
-                    is_host_memory=False,
-                    payload_segment=step,
-                    total_segments=self.num_ranks - 1
+                session_id = self.get_next_session_id(rank)
+                segments = self.generate_collective_packet_segments(
+                    Operation.REDUCE_SCATTER, rank, next_rank, chunk_size,
+                    tag | (func_id << 16), session_id
                 )
-                packets.append(packet)
+                packets.extend(segments)
             
-            self.advance_time(chunk_size // 64 + 30)
+            self.advance_time(30)
         
         return packets
     
@@ -728,7 +686,19 @@ class ACCLTraceGenerator:
         """Generate a complete trace with mixed operations"""
         all_packets = []
         
-        # Define operation weights (collective operations are less frequent)
+        # Define operation weights. These are chosen to simulate a typical, general-purpose
+        # workload you might find in High-Performance Computing (HPC) or distributed
+        # machine learning applications. They are a reasonable approximation based on
+        # common communication patterns.
+        #
+        # 1. Highest Weight: Point-to-Point (30%) - Foundational and frequent.
+        # 2. High Weight: Common Collectives (10% each) - `broadcast` and `allreduce` are
+        #    cornerstones of ML and data distribution.
+        # 3. Medium Weight: Standard Building Blocks (8% each) - Essential MPI-style
+        #    collectives like `scatter`, `gather`, etc.
+        # 4. Lower Weight: Specialized/Less Frequent (6% each) - `barrier`, `alltoall`, etc.
+        #
+        # These values can be configured to simulate different application profiles.
         operations = [
             (self.generate_send_recv_pair, 30),  # 30% point-to-point
             (self.generate_broadcast, 10),
@@ -758,17 +728,70 @@ class ACCLTraceGenerator:
         return all_packets
 
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description='ACCL Packet Trace Generator - Generate packet traces for ACCL network simulation',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    # Basic configuration
+    parser.add_argument('-r', '--ranks', type=int, default=8,
+                       help='Number of ranks in the network')
+    parser.add_argument('-n', '--num-operations', type=int, default=50,
+                       help='Number of operations to generate')
+    parser.add_argument('-s', '--seed', type=int, default=42,
+                       help='Random seed for reproducible traces')
+    
+    # Node selection
+    parser.add_argument('--node', type=int, default=3,
+                       help='Specific node rank to generate single-node trace for')
+    
+    # Hardware parameters
+    parser.add_argument('--max-packet-size', type=int, default=4096,
+                       help='Maximum packet size in bytes (hardware constraint)')
+    parser.add_argument('--datapath-width', type=int, default=64,
+                       help='Datapath width in bytes')
+    parser.add_argument('--eager-threshold', type=int, default=32768,
+                       help='Eager protocol threshold in bytes (above this uses rendezvous)')
+    
+    # Output directories
+    parser.add_argument('--output-all', type=str, default='output_all_nodes',
+                       help='Output directory for all nodes trace')
+    parser.add_argument('--output-node', type=str, default='output_single_node',
+                       help='Output directory for single node trace')
+    
+    # Output format options
+    parser.add_argument('--skip-binary', action='store_true',
+                       help='Skip binary output generation')
+    parser.add_argument('--skip-hex', action='store_true',
+                       help='Skip hexadecimal output generation')
+    parser.add_argument('--verbose', action='store_true',
+                       help='Print verbose output including sample packets')
+    
+    return parser.parse_args()
+
+
 def main():
     """Main function to generate packet trace"""
     import os
     
-    # Configuration
-    NUM_RANKS = 8
-    NUM_OPERATIONS = 50
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Configuration from arguments
+    NUM_RANKS = args.ranks
+    NUM_OPERATIONS = args.num_operations
+    selected_node = args.node
+    
+    # Validate arguments
+    if selected_node < 0 or selected_node >= NUM_RANKS:
+        print(f"Error: Node {selected_node} is out of range [0, {NUM_RANKS-1}]")
+        sys.exit(1)
     
     # Create output directories
-    OUTPUT_DIR_ALL = "output_all_nodes"
-    OUTPUT_DIR_NODE = "output_single_node"
+    OUTPUT_DIR_ALL = args.output_all
+    OUTPUT_DIR_NODE = args.output_node
     
     os.makedirs(OUTPUT_DIR_ALL, exist_ok=True)
     os.makedirs(OUTPUT_DIR_NODE, exist_ok=True)
@@ -784,13 +807,24 @@ def main():
     print(f"Configuration:")
     print(f"  Number of ranks: {NUM_RANKS}")
     print(f"  Number of operations: {NUM_OPERATIONS}")
+    print(f"  Random seed: {args.seed}")
+    print(f"  Selected node: {selected_node}")
+    print(f"  Max packet size: {args.max_packet_size} bytes")
+    print(f"  Datapath width: {args.datapath_width} bytes")
+    print(f"  Eager threshold: {args.eager_threshold} bytes")
     print(f"  Output directory (all nodes): {OUTPUT_DIR_ALL}/")
     print(f"  Output directory (single node): {OUTPUT_DIR_NODE}/")
     print(f"=" * 80)
     print()
     
-    # Generate trace
-    generator = ACCLTraceGenerator(num_ranks=NUM_RANKS)
+    # Generate trace with configurable parameters
+    generator = ACCLTraceGenerator(
+        num_ranks=NUM_RANKS,
+        seed=args.seed,
+        max_packet_size=args.max_packet_size,
+        datapath_width=args.datapath_width,
+        eager_threshold=args.eager_threshold
+    )
     packets = generator.generate_trace(num_operations=NUM_OPERATIONS)
     
     # Write human-readable trace to file
@@ -850,117 +884,119 @@ def main():
         
         f.write("=" * 100 + "\n")
     
-    # Write raw hex trace to file (ready for encapsulation)
-    print("Generating raw hexadecimal packet trace...")
-    with open(OUTPUT_HEX_RAW_FILE, 'w') as f:
-        f.write("# ACCL Packet Trace - Raw Hexadecimal Format\n")
-        f.write("# Ready for encapsulation in transport/ethernet protocols\n")
-        f.write(f"# Total packets: {len(packets)}\n")
-        f.write(f"# Each line represents one complete packet in hexadecimal\n")
-        f.write("#\n")
+    # Write hex files (optional)
+    if not args.skip_hex:
+        print("Generating hexadecimal packet traces...")
+        # Write raw hex trace to file (ready for encapsulation)
+        with open(OUTPUT_HEX_RAW_FILE, 'w') as f:
+            f.write("# ACCL Packet Trace - Raw Hexadecimal Format\n")
+            f.write("# Ready for encapsulation in transport/ethernet protocols\n")
+            f.write(f"# Total packets: {len(packets)}\n")
+            f.write(f"# Each line represents one complete packet in hexadecimal\n")
+            f.write("#\n")
+            
+            for i, packet in enumerate(packets):
+                f.write(f"{packet.to_hex()}\n")
         
-        for i, packet in enumerate(packets):
-            f.write(f"{packet.to_hex()}\n")
-    
-    # Write detailed hex trace to file
-    print("Generating detailed hexadecimal packet trace...")
-    with open(OUTPUT_HEX_DETAILED_FILE, 'w') as f:
-        f.write("=" * 100 + "\n")
-        f.write("ACCL PACKET TRACE (Hexadecimal Format - Detailed)\n")
-        f.write("=" * 100 + "\n")
-        f.write(f"Configuration:\n")
-        f.write(f"  Number of Ranks: {NUM_RANKS}\n")
-        f.write(f"  Number of Operations: {NUM_OPERATIONS}\n")
-        f.write(f"  Total Packets: {len(packets)}\n")
-        f.write(f"  Packet Header Size: 64 bytes\n")
-        f.write("=" * 100 + "\n")
-        f.write("\n")
-        f.write("Packet Binary Structure (64-byte header + payload):\n")
-        f.write("  Offset 0-1:   Protocol number (0xACCE)\n")
-        f.write("  Offset 2-3:   Version (0x01) + reserved\n")
-        f.write("  Offset 4-7:   Packet type\n")
-        f.write("  Offset 8-11:  Operation type\n")
-        f.write("  Offset 12-15: Source rank\n")
-        f.write("  Offset 16-19: Destination rank\n")
-        f.write("  Offset 20-23: Tag\n")
-        f.write("  Offset 24-27: Session ID\n")
-        f.write("  Offset 28-31: Sequence number\n")
-        f.write("  Offset 32-35: Data length\n")
-        f.write("  Offset 36-39: Timestamp\n")
-        f.write("  Offset 40-43: Flags (compression, memory type)\n")
-        f.write("  Offset 44-51: Address (8 bytes)\n")
-        f.write("  Offset 52-55: Reserved (8 bytes)\n")
-        f.write("  Offset 56-57: Payload segment\n")
-        f.write("  Offset 58-59: Total segments\n")
-        f.write("  Offset 60-63: Checksum\n")
-        f.write("  Offset 64+:   Payload data\n")
-        f.write("=" * 100 + "\n")
-        f.write("\n")
-        
-        for i, packet in enumerate(packets):
+        # Write detailed hex trace to file
+        print("Generating detailed hexadecimal packet trace...")
+        with open(OUTPUT_HEX_DETAILED_FILE, 'w') as f:
             f.write("=" * 100 + "\n")
-            f.write(f"PACKET {i+1}/{len(packets)}\n")
+            f.write("ACCL PACKET TRACE (Hexadecimal Format - Detailed)\n")
             f.write("=" * 100 + "\n")
-            f.write(f"Description: {packet}\n")
+            f.write(f"Configuration:\n")
+            f.write(f"  Number of Ranks: {NUM_RANKS}\n")
+            f.write(f"  Number of Operations: {NUM_OPERATIONS}\n")
+            f.write(f"  Total Packets: {len(packets)}\n")
+            f.write(f"  Packet Header Size: 64 bytes\n")
+            f.write("=" * 100 + "\n")
+            f.write("\n")
+            f.write("Packet Binary Structure (64-byte header + payload):\n")
+            f.write("  Offset 0-1:   Protocol number (0xACCE)\n")
+            f.write("  Offset 2-3:   Version (0x01) + reserved\n")
+            f.write("  Offset 4-7:   Packet type\n")
+            f.write("  Offset 8-11:  Operation type\n")
+            f.write("  Offset 12-15: Source rank\n")
+            f.write("  Offset 16-19: Destination rank\n")
+            f.write("  Offset 20-23: Tag\n")
+            f.write("  Offset 24-27: Session ID\n")
+            f.write("  Offset 28-31: Sequence number\n")
+            f.write("  Offset 32-35: Data length\n")
+            f.write("  Offset 36-39: Timestamp\n")
+            f.write("  Offset 40-43: Flags (compression, memory type)\n")
+            f.write("  Offset 44-51: Address (8 bytes)\n")
+            f.write("  Offset 52-55: Reserved (8 bytes)\n")
+            f.write("  Offset 56-57: Payload segment\n")
+            f.write("  Offset 58-59: Total segments\n")
+            f.write("  Offset 60-63: Checksum\n")
+            f.write("  Offset 64+:   Payload data\n")
+            f.write("=" * 100 + "\n")
             f.write("\n")
             
-            # Parse the binary packet to show detailed breakdown
-            binary_data = packet.to_binary()
-            
-            f.write("Header Breakdown (64 bytes):\n")
-            f.write("-" * 100 + "\n")
-            f.write(f"  Protocol Number:    {binary_data[0:2].hex():20s}  (bytes 0-1)\n")
-            f.write(f"  Version/Reserved:   {binary_data[2:4].hex():20s}  (bytes 2-3)\n")
-            f.write(f"  Packet Type:        {binary_data[4:8].hex():20s}  (bytes 4-7)\n")
-            f.write(f"  Operation:          {binary_data[8:12].hex():20s}  (bytes 8-11)\n")
-            f.write(f"  Source Rank:        {binary_data[12:16].hex():20s}  (bytes 12-15)\n")
-            f.write(f"  Destination Rank:   {binary_data[16:20].hex():20s}  (bytes 16-19)\n")
-            f.write(f"  Tag:                {binary_data[20:24].hex():20s}  (bytes 20-23)\n")
-            f.write(f"  Session ID:         {binary_data[24:28].hex():20s}  (bytes 24-27)\n")
-            f.write(f"  Sequence Number:    {binary_data[28:32].hex():20s}  (bytes 28-31)\n")
-            f.write(f"  Data Length:        {binary_data[32:36].hex():20s}  (bytes 32-35)\n")
-            f.write(f"  Timestamp:          {binary_data[36:40].hex():20s}  (bytes 36-39)\n")
-            f.write(f"  Flags:              {binary_data[40:44].hex():20s}  (bytes 40-43)\n")
-            f.write(f"  Address:            {binary_data[44:52].hex():20s}  (bytes 44-51)\n")
-            f.write(f"  Reserved:           {binary_data[52:56].hex():20s}  (bytes 52-55)\n")
-            f.write(f"  Payload Segment:    {binary_data[56:58].hex():20s}  (bytes 56-57)\n")
-            f.write(f"  Total Segments:     {binary_data[58:60].hex():20s}  (bytes 58-59)\n")
-            f.write(f"  Checksum:           {binary_data[60:64].hex():20s}  (bytes 60-63)\n")
-            f.write("\n")
-            
-            if len(binary_data) > 64:
-                payload_size = len(binary_data) - 64
-                f.write(f"Payload Data ({payload_size} bytes):\n")
+            for i, packet in enumerate(packets):
+                f.write("=" * 100 + "\n")
+                f.write(f"PACKET {i+1}/{len(packets)}\n")
+                f.write("=" * 100 + "\n")
+                f.write(f"Description: {packet}\n")
+                f.write("\n")
+                
+                # Parse the binary packet to show detailed breakdown
+                binary_data = packet.to_binary()
+                
+                f.write("Header Breakdown (64 bytes):\n")
                 f.write("-" * 100 + "\n")
-                f.write(packet.to_hex_formatted() + "\n")
+                f.write(f"  Protocol Number:    {binary_data[0:2].hex():20s}  (bytes 0-1)\n")
+                f.write(f"  Version/Reserved:   {binary_data[2:4].hex():20s}  (bytes 2-3)\n")
+                f.write(f"  Packet Type:        {binary_data[4:8].hex():20s}  (bytes 4-7)\n")
+                f.write(f"  Operation:          {binary_data[8:12].hex():20s}  (bytes 8-11)\n")
+                f.write(f"  Source Rank:        {binary_data[12:16].hex():20s}  (bytes 12-15)\n")
+                f.write(f"  Destination Rank:   {binary_data[16:20].hex():20s}  (bytes 16-19)\n")
+                f.write(f"  Tag:                {binary_data[20:24].hex():20s}  (bytes 20-23)\n")
+                f.write(f"  Session ID:         {binary_data[24:28].hex():20s}  (bytes 24-27)\n")
+                f.write(f"  Sequence Number:    {binary_data[28:32].hex():20s}  (bytes 28-31)\n")
+                f.write(f"  Data Length:        {binary_data[32:36].hex():20s}  (bytes 32-35)\n")
+                f.write(f"  Timestamp:          {binary_data[36:40].hex():20s}  (bytes 36-39)\n")
+                f.write(f"  Flags:              {binary_data[40:44].hex():20s}  (bytes 40-43)\n")
+                f.write(f"  Address:            {binary_data[44:52].hex():20s}  (bytes 44-51)\n")
+                f.write(f"  Reserved:           {binary_data[52:56].hex():20s}  (bytes 52-55)\n")
+                f.write(f"  Payload Segment:    {binary_data[56:58].hex():20s}  (bytes 56-57)\n")
+                f.write(f"  Total Segments:     {binary_data[58:60].hex():20s}  (bytes 58-59)\n")
+                f.write(f"  Checksum:           {binary_data[60:64].hex():20s}  (bytes 60-63)\n")
+                f.write("\n")
+                
+                if len(binary_data) > 64:
+                    payload_size = len(binary_data) - 64
+                    f.write(f"Payload Data ({payload_size} bytes):\n")
+                    f.write("-" * 100 + "\n")
+                    f.write(packet.to_hex_formatted() + "\n")
+                
+                f.write("\n")
+                f.write("Complete Packet (Hex - Continuous):\n")
+                f.write("-" * 100 + "\n")
+                hex_str = packet.to_hex()
+                # Write in lines of 64 hex chars (32 bytes per line)
+                for j in range(0, len(hex_str), 64):
+                    f.write(hex_str[j:j+64] + "\n")
+                f.write("\n")
+    
+    # Write binary trace to file (optional)
+    if not args.skip_binary:
+        print("Generating binary packet trace...")
+        with open(OUTPUT_BIN_FILE, 'wb') as f:
+            # Write header
+            header = struct.pack('>4sIII', 
+                               b'ACCL',           # Protocol identifier
+                               1,                 # Version
+                               NUM_RANKS,         # Number of ranks
+                               len(packets))      # Number of packets
+            f.write(header)
             
-            f.write("\n")
-            f.write("Complete Packet (Hex - Continuous):\n")
-            f.write("-" * 100 + "\n")
-            hex_str = packet.to_hex()
-            # Write in lines of 64 hex chars (32 bytes per line)
-            for j in range(0, len(hex_str), 64):
-                f.write(hex_str[j:j+64] + "\n")
-            f.write("\n")
+            # Write all packets
+            for packet in packets:
+                f.write(packet.to_binary())
     
-    # Write binary trace to file
-    print("Generating binary packet trace...")
-    with open(OUTPUT_BIN_FILE, 'wb') as f:
-        # Write header
-        header = struct.pack('>4sIII', 
-                           b'ACCL',           # Protocol identifier
-                           1,                 # Version
-                           NUM_RANKS,         # Number of ranks
-                           len(packets))      # Number of packets
-        f.write(header)
-        
-        # Write all packets
-        for packet in packets:
-            f.write(packet.to_binary())
-    
-    # Generate per-node traces for a randomly selected node
-    selected_node = random.randint(0, NUM_RANKS - 1)
-    print(f"\nGenerating per-node trace for randomly selected node: {selected_node}")
+    # Generate per-node traces for the selected node
+    print(f"\nGenerating per-node trace for selected node: {selected_node}")
     
     # Filter packets that involve the selected node (as source or destination)
     node_packets = [p for p in packets if p.src_rank == selected_node or p.dst_rank == selected_node]
@@ -1093,23 +1129,24 @@ def main():
     print(f"    └── accl_packet_trace_node{selected_node}.bin (binary)")
     print()
     
-    # Print sample packets
-    print("Sample packets from full trace (first 3):")
-    print("-" * 100)
-    for i, packet in enumerate(packets[:3]):
-        print(f"\nPacket {i+1}:")
-        print(packet)
-        print(f"Hex (first 128 bytes): {packet.to_hex()[:256]}...")
-    print("-" * 100)
-    
-    if len(node_packets) > 0:
-        print(f"\nSample packets for node {selected_node} (first 3):")
+    # Print sample packets (if verbose mode)
+    if args.verbose:
+        print("Sample packets from full trace (first 3):")
         print("-" * 100)
-        for i, packet in enumerate(node_packets[:3]):
+        for i, packet in enumerate(packets[:3]):
             print(f"\nPacket {i+1}:")
             print(packet)
             print(f"Hex (first 128 bytes): {packet.to_hex()[:256]}...")
         print("-" * 100)
+        
+        if len(node_packets) > 0:
+            print(f"\nSample packets for node {selected_node} (first 3):")
+            print("-" * 100)
+            for i, packet in enumerate(node_packets[:3]):
+                print(f"\nPacket {i+1}:")
+                print(packet)
+                print(f"Hex (first 128 bytes): {packet.to_hex()[:256]}...")
+            print("-" * 100)
 
 
 if __name__ == "__main__":

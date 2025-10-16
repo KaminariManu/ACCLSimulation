@@ -1,497 +1,237 @@
-# ACCL Packet Trace Generator
+# ACCL Packet Trace Generator: A Tool for Network Traffic Simulation
 
-## Overview
 
-This Python script (`generate_packet_trace.py`) generates a comprehensive trace of ACCL (Accelerated Collective Communication Library) packets for various communication operations. The generator creates packets in multiple formats including **hexadecimal format ready for encapsulation** in transport protocols (TCP/UDP) or Ethernet frames.
+## 1. Introduction
 
-The trace includes both point-to-point and collective operations, properly sequenced according to ACCL protocol requirements.
 
-## Requirements
 
-- Python 3.6 or higher
-- No external dependencies (uses only standard library)
+The ACCL Packet Trace Generator is a configurable software tool designed to produce realistic network traffic traces based on the Alveo Collective Communication Library (ACCL) protocol. It supports a comprehensive set of point-to-point and collective communication operations.
+The generator is implemented in Python 3 and is available in two versions: a modular, extensible version and a legacy single-file script. Both versions produce identical, byte-accurate output traces in multiple formats suitable for a range of simulation and analysis tools.
 
-## Quick Start
+
+
+## 2. Core Functionality
+
+
+### 2.1. Supported Communication Primitives 
+The generator creates packets in multiple formats including hexadecimal format ready for encapsulation in transport protocols (TCP/UDP) or Ethernet frames.
+
+
+The generator models the following ACCL communication operations:
+
+- **Point-to-Point Operations:**# Generate trace with defaults (8 ranks, 50 operations)
+
+  - `Send`/`Receive` using the Eager protocol for small messages (≤ 32 KB).
+
+  - `Send`/`Receive` using the Rendezvous protocol for large messages (> 32 KB), which involves an address exchange followed by an RDMA (Remote Direct Memory Access) transfer.python main.py## Quick Start
+
+
+
+- **Collective Operations:**
+
+  - **Data Distribution:** `Broadcast`, `Scatter`
+
+  - **Data Gathering:** `Gather`, `Allgather`
+
+  - **Reduction Operations:** `Reduce`, `Allreduce`, `Reduce-Scatter`
+
+  - **Synchronization:** `Barrier`
+
+  - **Permutation:** `All-to-All`
+
+
+
+### 2.2. Output Trace Formats
+
+# Custom configuration
+
+The tool generates four distinct output files, each serving a different purpose:
+
+1.  **Human-Readable Text (`accl_packet_trace.txt`):** A detailed, formatted log containing configuration parameters, summary statistics, and a human-readable breakdown of each packet. Ideal for debugging and manual inspection.
+
+2.  **Raw Hexadecimal (`accl_packets_raw_hex.txt`):** Contains one hexadecimal string per packet, representing the raw byte content. This format is designed for direct ingestion by network simulators or for encapsulation into transport layer (TCP/UDP) or link layer (Ethernet) frames.
+
+3.  **Detailed Hexadecimal (`accl_packets_hex_detailed.txt`):** Provides a hexadecimal dump of each packet with annotated field breakdowns, facilitating low-level protocol analysis.
+
+4.  **Binary (`accl_packet_trace.bin`):** A compact, byte-for-byte binary representation of the packet trace, suitable for high-performance simulation environments.
+
+
+
+## 3. System Architecture
+
+The primary version of the generator is architected in a modular fashion to promote maintainability, extensibility, and reusability. The source code is organized within the `src/` directory.
+
+```
+PacketTraceGenerator/
+├── main.py                        # Main execution entry point
+├── src/                           # Directory for modular source code
+│   ├── __init__.py                # Initializes the 'src' package
+│   ├── accl_types.py              # Defines enumerations for packet types and operations
+│   ├── packet.py                  # Contains the Packet data structure and serialization logic
+│   ├── trace_generator.py         # Core engine for trace generation
+│   ├── collective_operations.py   # Implements logic for collective communication patterns
+│   ├── output_writers.py          # Contains functions for writing different output formats
+│   └── cli.py                     # Handles command-line argument parsing
+├── generate_packet_trace.py       # Legacy single-file script for backward compatibility
+├── README.md                      # This document
+└── DEVELOPER.md                   # Guide for developers
+```
+
+This modular design allows individual components, such as the collective operation implementations or output formats, to be modified or extended with minimal impact on the rest of the system.
+
+## 4. Usage
+
+### 4.1. System Requirements
+
+-   Python 3.6 or higher.
+-   No external libraries are required; the tool relies solely on the Python standard library.
+
+### 4.2. Command-Line Interface
+
+The generator is controlled via a command-line interface with a range of configurable parameters.
+
+**Basic Usage:**
 
 ```bash
-python generate_packet_trace.py
+# Generate a default trace (8 ranks, 50 operations)
+python main.py
+
+# Display all available options
+python main.py --help
 ```
 
-This generates 4 output files with 50 operations across 8 ranks by default.
+**Configurable Parameters:**
 
----
-
-## Output Files
-
-When you run the generator, it creates **4 output files**:
-
-### 1. `accl_packet_trace.txt` (Human-Readable)
-- Contains packet descriptions in text format
-- Easy to read and understand
-- Shows timestamps, operations, source/destination, etc.
-- Includes statistics summary
-- **Use for**: Analysis, debugging, and understanding packet flow
-
-**Example output:**
-```
-[T=001250] DATA_EAGER           OP=SEND            SRC= 3 DST= 5 TAG=  457 SES= 12 SEQ=  23 LEN=  4096 SEG=1/2 [HOST, COMPRESS=0x8]
-```
-
-### 2. `accl_packets_raw_hex.txt` (Ready for Encapsulation)
-- **One packet per line** in pure hexadecimal format
-- No formatting, no descriptions, just hex
-- Ready to be read and encapsulated in transport/link layer protocols
-- **Use for**: Direct reading by your encapsulation software/hardware
-
-**Example format:**
-```
-acce0001000000000000000000000002000000000000000500000000000002e7000000000000000000100000000fa00000...
-acce000100000000000000000000000200000000000000050000000000000000000000010000010100000000012c0000...
-```
-
-### 3. `accl_packets_hex_detailed.txt` (Detailed Breakdown)
-- Each packet shown with complete breakdown
-- Header fields separated and labeled
-- Payload data displayed in formatted hex dump
-- Shows byte offsets and field meanings
-- **Use for**: Understanding packet structure, debugging, learning the protocol
-
-**Example format:**
-```
-================================================================================
-PACKET 1/142
-================================================================================
-Description: [T=000000] DATA_EAGER OP=SEND SRC=2 DST=5...
-
-Header Breakdown (64 bytes):
-  Protocol Number:    acce                  (bytes 0-1)
-  Version/Reserved:   0100                  (bytes 2-3)
-  Packet Type:        00000000              (bytes 4-7)
-  Operation:          00000000              (bytes 8-11)
-  Source Rank:        00000002              (bytes 12-15)
-  Destination Rank:   00000005              (bytes 16-19)
-  ...
-
-Payload Data (4096 bytes):
-00000000  ac ce 00 01 00 00 00 00 00 00 00 00 00 00 00 02  |................|
-...
-
-Complete Packet (Hex - Continuous):
-acce0001000000000000000000000002000000000000000500000000000002e7
-...
-```
-
-### 4. `accl_packet_trace.bin` (Binary Format)
-- Pure binary file
-- Contains file header + all packets in binary form
-- Most efficient storage
-- **Use for**: Binary processing, simulation tools, direct memory loading
-
----
-
-## Features
-
-### Supported Operations
-
-#### 1. Point-to-Point Operations
-- **SEND/RECV**: Both eager protocol (for small messages) and rendezvous protocol (for large messages)
-  - **Eager**: Direct data transfer with segmentation (≤32KB)
-  - **Rendezvous**: Three-phase protocol (address exchange, RDMA transfer, completion notification) (>32KB)
-
-#### 2. Collective Operations
-- **BROADCAST**: Root sends same data to all ranks (flat tree or binary tree)
-- **SCATTER**: Root sends different data chunks to each rank
-- **GATHER**: All ranks send data to root (ring-based)
-- **REDUCE**: Combine data from all ranks using reduction operation (ring-based)
-- **ALLGATHER**: Each rank gathers data from all other ranks (ring-based)
-- **ALLREDUCE**: Reduce and broadcast combined (reduce-scatter + allgather)
-- **REDUCE_SCATTER**: Reduce and scatter combined (ring-based)
-- **BARRIER**: Synchronization barrier (gather + scatter notifications)
-- **ALLTOALL**: Each rank sends unique data to every other rank
-
-### Packet Types
-
-The generator creates the following packet types:
-
-| Type ID | Name | Description |
-|---------|------|-------------|
-| 0 | DATA_EAGER | Eager protocol data packet (≤32KB) |
-| 1 | RNDZV_ADDR | Rendezvous address exchange |
-| 2 | RNDZV_DATA | Rendezvous RDMA data transfer |
-| 3 | RNDZV_COMPLETE | Rendezvous completion notification |
-| 4 | COLLECTIVE_DATA | Collective operation data |
-
-### Operation Types
-
-| Op ID | Name | Description |
-|-------|------|-------------|
-| 0 | SEND | Point-to-point send |
-| 1 | RECV | Point-to-point receive |
-| 2 | BROADCAST | Broadcast to all ranks |
-| 3 | SCATTER | Scatter data to all ranks |
-| 4 | GATHER | Gather data from all ranks |
-| 5 | REDUCE | Reduce operation |
-| 6 | ALLGATHER | All-to-all gather |
-| 7 | ALLREDUCE | All-reduce operation |
-| 8 | REDUCE_SCATTER | Reduce-scatter operation |
-| 9 | BARRIER | Synchronization barrier |
-| 10 | ALLTOALL | All-to-all communication |
-
----
-
-## Binary Packet Structure
-
-Each packet has a **64-byte header** followed by the **payload**:
-
-### Header Structure (64 bytes)
-
-| Offset | Size | Field | Description |
-|--------|------|-------|-------------|
-| 0-1    | 2    | Protocol Number | 0xACCE (ACCL Communication) |
-| 2-3    | 2    | Version | Protocol version (0x0001) |
-| 4-7    | 4    | Packet Type | Type of packet (eager, rendezvous, etc.) |
-| 8-11   | 4    | Operation | ACCL operation (SEND, RECV, BROADCAST, etc.) |
-| 12-15  | 4    | Source Rank | Source rank ID |
-| 16-19  | 4    | Destination Rank | Destination rank ID |
-| 20-23  | 4    | Tag | Message tag for matching (0xFFFFFFFF = TAG_ANY) |
-| 24-27  | 4    | Session ID | Communication session identifier |
-| 28-31  | 4    | Sequence Number | Packet sequence number |
-| 32-35  | 4    | Data Length | Payload size in bytes |
-| 36-39  | 4    | Timestamp | Simulation timestamp (lower 32 bits) |
-| 40-43  | 4    | Flags | Compression, memory type, etc. |
-| 44-51  | 8    | Address | Memory address (for RDMA operations) |
-| 52-55  | 4    | Reserved | Reserved for future use |
-| 56-57  | 2    | Payload Segment | Current segment number |
-| 58-59  | 2    | Total Segments | Total number of segments |
-| 60-63  | 4    | Checksum | Packet checksum |
-| 64+    | N    | Payload | Actual data (N = Data Length bytes) |
-
-**Important**: All fields are in **big-endian** (network byte order)
-
-### Flags Field (Bits 40-43)
-
-| Bit | Meaning |
-|-----|---------|
-| 0 | Host Memory (1 = host, 0 = device) |
-| 1-3 | Reserved |
-| 4-7 | Compression flags (0x0 = none, 0x8 = Ethernet compressed, etc.) |
-
-### Packet Metadata
-- **Timestamp**: Simulation time in cycles
-- **Packet Type**: Type of packet (eager, rendezvous, etc.)
-- **Operation**: Associated ACCL operation
-- **Source Rank**: Originating rank (0 to N-1)
-- **Destination Rank**: Target rank (0 to N-1)
-- **Tag**: Message tag for matching (or TAG_ANY = 0xFFFFFFFF)
-- **Session ID**: Communication session identifier
-- **Sequence Number**: Per-connection sequence number
-- **Data Length**: Payload size in bytes
-- **Compression**: Compression flags (0x0 to 0xF)
-- **Host Memory Flag**: Indicates if buffer is in host or device memory
-- **Address**: 64-bit address (for rendezvous operations)
-- **Segment Info**: Current segment and total segments (for multi-packet transfers)
-- **Checksum**: Sum of all header+payload bytes mod 2³²
-
----
-
-## Configuration
-
-Edit the `main()` function in `generate_packet_trace.py` to customize:
-
-```python
-NUM_RANKS = 8           # Number of ranks in the communicator
-NUM_OPERATIONS = 50     # Number of operations to generate
-```
-
-### Advanced Customization
-
-Modify the `generate_trace()` method to adjust operation weights:
-
-```python
-operations = [
-    (self.generate_send_recv_pair, 30),  # 30% point-to-point
-    (self.generate_broadcast, 10),       # 10% broadcast
-    (self.generate_scatter, 8),          # 8% scatter
-    (self.generate_gather, 8),           # 8% gather
-    (self.generate_reduce, 8),           # 8% reduce
-    (self.generate_allgather, 8),        # 8% allgather
-    (self.generate_allreduce, 10),       # 10% allreduce
-    (self.generate_reduce_scatter, 6),   # 6% reduce-scatter
-    (self.generate_barrier, 6),          # 6% barrier
-    (self.generate_alltoall, 6),         # 6% alltoall
-]
-```
-
----
-
-## How to Use the Hex Packets
-
-### Reading Raw Hex File (Python)
-
-```python
-# Read raw hex packets ready for encapsulation
-with open('accl_packets_raw_hex.txt', 'r') as f:
-    for line in f:
-        line = line.strip()
-        if line.startswith('#'):
-            continue  # Skip comments
-        
-        # Convert hex string to bytes
-        packet_bytes = bytes.fromhex(line)
-        
-        # Now you can encapsulate this in TCP/UDP/Ethernet
-        # packet_bytes is ready to be wrapped in transport layer
-```
-
-### Encapsulating in Ethernet Frame
-
-```python
-def encapsulate_ethernet(packet_hex):
-    """Encapsulate ACCL packet in Ethernet frame"""
-    # Parse hex to bytes
-    payload = bytes.fromhex(packet_hex)
+-   **Network Configuration:**
+    -   `--ranks`: Number of network nodes (ranks).
+    -   `--num-operations`: Total number of communication operations to generate.
+    -   `--seed`: Seed for the random number generator to ensure reproducibility.
+-   **Hardware and Protocol Parameters:**
+    -   `--max-packet-size`: The maximum size of a packet data payload in bytes (default: 4096).
+    -   `--eager-threshold`: The message size threshold for switching between the Eager and Rendezvous protocols (default: 32768 bytes).
+-   **Operation Weights (Traffic Mix Customization):**
+    -   `--weight-sendrecv`: Relative frequency of point-to-point send/recv operations (default: 30).
+    -   `--weight-broadcast`: Relative frequency of broadcast operations (default: 10).
+    -   `--weight-scatter`: Relative frequency of scatter operations (default: 8).
+    -   `--weight-gather`: Relative frequency of gather operations (default: 8).
+    -   `--weight-reduce`: Relative frequency of reduce operations (default: 8).
+    -   `--weight-allgather`: Relative frequency of allgather operations (default: 8).
+    -   `--weight-allreduce`: Relative frequency of allreduce operations (default: 10).
+    -   `--weight-reduce-scatter`: Relative frequency of reduce-scatter operations (default: 6).
+    -   `--weight-barrier`: Relative frequency of barrier operations (default: 6).
+    -   `--weight-alltoall`: Relative frequency of alltoall operations (default: 6).
     
-    # Create Ethernet frame
-    dst_mac = bytes.fromhex('ffffffffffff')  # Broadcast MAC
-    src_mac = bytes.fromhex('001122334455')  # Source MAC
-    ethertype = bytes.fromhex('0800')        # IPv4 (or use custom)
-    
-    ethernet_frame = dst_mac + src_mac + ethertype + payload
-    return ethernet_frame
+    **Note:** Weights are relative values that determine the probability distribution of operations. The actual percentage for each operation is calculated as `(weight / sum_of_all_weights) × 100`. Default values simulate a typical general-purpose HPC/ML workload.
+-   **Output Configuration:**
+    -   `--output-all`: Directory for storing the complete network trace.
+    -   `--output-node`: Directory for storing a trace filtered for a single node.
+    -   `--node`: The specific rank for which to generate a single-node trace.
+    -   `--skip-binary`, `--skip-hex`: Flags to disable generation of specific output formats.
 
-# Read and encapsulate all packets
-with open('accl_packets_raw_hex.txt', 'r') as f:
-    for line in f:
-        if not line.startswith('#'):
-            frame = encapsulate_ethernet(line.strip())
-            # Send frame to network or save to PCAP
+**Example with Custom Parameters:**
+
+```bash
+# Generate a trace for a 32-node network with 1000 operations and a specific seed
+python main.py --ranks 32 --num-operations 1000 --seed 12345
+
+# Generate a trace simulating an ML training workload (allreduce-heavy)
+python main.py --ranks 16 --num-operations 500 \
+    --weight-allreduce 60 \
+    --weight-sendrecv 20 \
+    --weight-broadcast 10
+
+# Generate a trace with balanced collective operations
+python main.py --ranks 8 --num-operations 200 \
+    --weight-sendrecv 20 \
+    --weight-broadcast 10 \
+    --weight-scatter 10 \
+    --weight-gather 10 \
+    --weight-allreduce 15 \
+    --weight-allgather 10
 ```
 
-### Encapsulating in UDP/IP
+### 4.3. Customizing Traffic Patterns
 
-```python
-import socket
+The generator allows you to customize the mix of communication operations to simulate different application workloads:
 
-def encapsulate_udp(packet_bytes, src_ip, dst_ip, src_port, dst_port):
-    """Encapsulate ACCL packet in UDP/IP"""
-    # In practice, you'd use socket.sendto()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.sendto(packet_bytes, (dst_ip, dst_port))
-    sock.close()
+-   **Default Workload (General HPC/ML):** The default weights represent a typical mixed workload with dominant point-to-point communication (30%), balanced collectives, and frequent allreduce operations (10%) common in machine learning.
 
-# Read and send packets
-with open('accl_packets_raw_hex.txt', 'r') as f:
-    for line in f:
-        if not line.startswith('#'):
-            packet_bytes = bytes.fromhex(line.strip())
-            encapsulate_udp(packet_bytes, '192.168.1.1', '192.168.1.2', 5000, 5000)
-```
+-   **ML Training Workload:** For distributed deep learning, increase `--weight-allreduce` significantly (e.g., 60%) as gradient aggregation dominates communication.
 
-### Creating PCAP File
+-   **Data Distribution Workload:** For applications focused on data distribution and collection, increase `--weight-scatter` and `--weight-gather`.
 
-```python
-import struct
+-   **Point-to-Point Heavy:** For message-passing applications, increase `--weight-sendrecv` to 70-80%.
 
-def create_pcap_header():
-    """Create PCAP global header"""
-    protocol_id = 0xa1b2c3d4
-    version_major = 2
-    version_minor = 4
-    thiszone = 0
-    sigfigs = 0
-    snaplen = 65535
-    network = 1  # Ethernet
-    
-    return struct.pack('<IHHIIII', protocol_id, version_major, version_minor, 
-                       thiszone, sigfigs, snaplen, network)
+For detailed guidance on choosing appropriate weights, including rationale and examples, refer to **Section 5.3: Operation Weight Distribution** below.
 
-def create_pcap_packet(packet_data, timestamp=0):
-    """Create PCAP packet header + data"""
-    ts_sec = timestamp // 1000000
-    ts_usec = timestamp % 1000000
-    incl_len = len(packet_data)
-    orig_len = len(packet_data)
-    
-    header = struct.pack('<IIII', ts_sec, ts_usec, incl_len, orig_len)
-    return header + packet_data
+## 5. Protocol and Packet Structure
 
-# Create PCAP file
-with open('accl_packets.pcap', 'wb') as pcap:
-    pcap.write(create_pcap_header())
-    
-    timestamp = 0
-    with open('accl_packets_raw_hex.txt', 'r') as f:
-        for line in f:
-            if not line.startswith('#'):
-                packet_bytes = bytes.fromhex(line.strip())
-                # Optionally add Ethernet encapsulation here
-                pcap.write(create_pcap_packet(packet_bytes, timestamp))
-                timestamp += 1000  # 1ms between packets
+### 5.1. ACCL Packet Header
 
-print("PCAP file created! You can open it in Wireshark.")
-```
+Each ACCL packet is preceded by a 64-byte header containing metadata essential for routing, sequencing, and processing. All integer fields are encoded in network byte order (big-endian).
 
-### Parsing Binary Packets
+| Offset (Bytes) | Size (Bytes) | Field          | Description                                      |
+| :------------- | :----------- | :------------- | :----------------------------------------------- |
+| 0-1            | 2            | Protocol       | Protocol identifier (0xACCE).                    |
+| 2-3            | 2            | Version        | Protocol version.                                |
+| 4-7            | 4            | Packet Type    | The type of packet (e.g., `DATA_EAGER`, `RNDZV_ADDR`). |
+| 8-11           | 4            | Operation      | The communication primitive (e.g., `SEND`, `BROADCAST`). |
+| 12-15          | 4            | Source Rank    | The originating node's rank.                     |
+| 16-19          | 4            | Dest Rank      | The destination node's rank.                     |
+| 20-23          | 4            | Tag            | Message matching identifier.                     |
+| 24-27          | 4            | Session ID     | Identifier for a multi-packet communication session. |
+| 28-31          | 4            | Sequence #     | Per-connection sequence number for ordering.     |
+| 32-35          | 4            | Data Length    | Length of the payload in bytes.                  |
+| 36-39          | 4            | Timestamp      | Simulation timestamp.                            |
+| 40-43          | 4            | Flags          | Flags for special handling (e.g., compression).  |
+| 44-51          | 8            | Address        | 64-bit address for Rendezvous (RDMA) transfers.  |
+| 52-55          | 4            | Reserved       | Reserved for future use.                         |
+| 56-57          | 2            | Segment #      | The sequence number of the current packet segment. |
+| 58-59          | 2            | Total Segments | The total number of segments for the message.    |
+| 60-63          | 4            | Checksum       | A simple checksum for data integrity.            |
 
-```python
-import struct
+### 5.2. Communication Protocols
 
-def parse_accl_packet(hex_string):
-    """Parse hexadecimal ACCL packet into fields"""
-    packet_bytes = bytes.fromhex(hex_string)
-    
-    # Unpack header (64 bytes)
-    header = struct.unpack('>HHBBIIIIIIIIQQHHHI', packet_bytes[0:64])
-    
-    protocol_number = header[0]
-    version = header[1]
-    packet_type = header[4]
-    operation = header[5]
-    src_rank = header[6]
-    dst_rank = header[7]
-    tag = header[8]
-    session_id = header[9]
-    seq_num = header[10]
-    data_len = header[11]
-    timestamp = header[12]
-    flags = header[13]
-    address = header[14]
-    payload_seg = header[16]
-    total_segs = header[17]
-    checksum = header[18]
-    
-    # Extract payload
-    payload = packet_bytes[64:64+data_len]
-    
-    return {
-        'protocol_number': hex(protocol_number),
-        'version': version,
-        'packet_type': packet_type,
-        'operation': operation,
-        'src_rank': src_rank,
-        'dst_rank': dst_rank,
-        'tag': tag,
-        'session_id': session_id,
-        'sequence_number': seq_num,
-        'data_length': data_len,
-        'timestamp': timestamp,
-        'flags': flags,
-        'address': hex(address),
-        'payload_segment': payload_seg,
-        'total_segments': total_segs,
-        'checksum': checksum,
-        'payload': payload
-    }
+-   **Eager Protocol:** For messages up to the `eager-threshold`, data is sent directly in one or more `DATA_EAGER` packets. Messages larger than `max-packet-size` are segmented.
+-   **Rendezvous Protocol:** For larger messages, a three-phase handshake is used:
+    1.  The receiver sends its memory buffer address to the sender in an `RNDZV_ADDR` packet.
+    2.  The sender performs an RDMA write and sends the data in an `RNDZV_DATA` packet.
+    3.  The sender concludes the transfer with an `RNDZV_COMPLETE` notification.
 
-# Example usage
-with open('accl_packets_raw_hex.txt', 'r') as f:
-    for line in f:
-        if not line.startswith('#'):
-            packet_info = parse_accl_packet(line.strip())
-            print(f"Packet: {packet_info['operation']} from rank {packet_info['src_rank']} "
-                  f"to rank {packet_info['dst_rank']}, length={packet_info['data_length']}")
-```
+### 5.3. Operation Weight Distribution
 
----
+The generator uses a weighted random selection mechanism to determine which communication operation to execute next. This approach allows realistic simulation of different application workload profiles.
 
-## Protocol Details
+**Default Weight Distribution:**
 
-### Eager Protocol (Messages ≤ 32KB)
+The default weights simulate a typical general-purpose HPC/ML workload:
 
-1. Sender directly transmits data in packets
-2. Data is segmented into 4KB chunks (MAX_PACKETSIZE)
-3. Each segment gets a sequence number
-4. Receiver buffers packets and matches by tag
+| Operation       | Default Weight | Typical Percentage | Rationale                                        |
+| :-------------- | :------------- | :----------------- | :----------------------------------------------- |
+| Send/Recv       | 30             | 30%                | Foundational point-to-point communication        |
+| Broadcast       | 10             | 10%                | Common for data distribution                     |
+| Allreduce       | 10             | 10%                | Critical for ML gradient aggregation             |
+| Scatter         | 8              | 8%                 | Standard data distribution pattern               |
+| Gather          | 8              | 8%                 | Standard data collection pattern                 |
+| Reduce          | 8              | 8%                 | Common reduction operation                       |
+| Allgather       | 8              | 8%                 | Frequent all-to-all data exchange                |
+| Reduce-Scatter  | 6              | 6%                 | Specialized collective operation                 |
+| Barrier         | 6              | 6%                 | Synchronization (less data-intensive)            |
+| Alltoall        | 6              | 6%                 | Personalized communication pattern               |
 
-**Flow:**
-```
-Sender → [DATA_EAGER segment 1] → Receiver
-Sender → [DATA_EAGER segment 2] → Receiver
-...
-```
+**Customization Philosophy:**
 
-### Rendezvous Protocol (Messages > 32KB)
+1.  **Highest Weight (Point-to-Point):** Direct node-to-node communication forms the foundation of most distributed applications and receives the highest default weight (30%).
 
-1. **Phase 1**: Receiver sends buffer address to sender
-2. **Phase 2**: Sender performs RDMA write to receiver's buffer
-3. **Phase 3**: Sender sends completion notification
+2.  **High Weight (Common Collectives):** Operations like `broadcast` and `allreduce` are cornerstones of modern distributed machine learning for parameter distribution and gradient aggregation, warranting significant weights (10% each).
 
-**Flow:**
-```
-Receiver → [RNDZV_ADDR with address] → Sender
-Sender → [RNDZV_DATA via RDMA] → Receiver's buffer
-Sender → [RNDZV_COMPLETE] → Receiver
-```
+3.  **Medium Weight (Standard Building Blocks):** Essential MPI-style collective operations such as `scatter`, `gather`, `reduce`, and `allgather` are fundamental building blocks used across diverse parallel algorithms (8% each).
 
-### Collective Operations
+4.  **Lower Weight (Specialized Operations):** More specialized operations like `reduce_scatter`, synchronization primitives like `barrier`, and complex patterns like `alltoall` are used more sparingly in typical workloads (6% each).
 
-Each collective operation follows specific communication patterns:
+These weights can be fully customized via command-line arguments to match specific application profiles. For example, distributed deep learning training would significantly increase the `allreduce` weight, while data-parallel preprocessing might emphasize `scatter` and `gather` operations.
 
-- **Ring-based**: Operations like allgather, reduce-scatter use ring topology
-- **Tree-based**: Broadcast can use binary tree for large communicators
-- **Flat-tree**: Small collectives use direct communication
-- **Two-phase**: Allreduce combines reduce-scatter and allgather
+## 6. Conclusion
 
----
+The ACCL Packet Trace Generator is a versatile and extensible tool for researchers and engineers working on network simulation, performance analysis, and protocol design. Its ability to generate a wide variety of realistic traffic patterns in multiple formats makes it a valuable asset for understanding and optimizing high-performance communication systems. The modular architecture ensures that the tool can be readily adapted to future research needs and evolving network protocols.
 
-## Example Workflow
-
-1. **Generate packets**: 
-   ```bash
-   python generate_packet_trace.py
-   ```
-
-2. **Choose output file**:
-   - Use `accl_packets_raw_hex.txt` for encapsulation
-   - Use `accl_packets_hex_detailed.txt` for analysis
-   - Use `accl_packet_trace.txt` for human reading
-   - Use `accl_packet_trace.bin` for binary processing
-
-3. **Read and parse**: Convert hex strings to bytes
-
-4. **Encapsulate**: Add TCP/UDP/Ethernet headers as needed
-
-5. **Transmit**: Send over network or save to PCAP for Wireshark
-
----
-
-## Validation
-
-The script ensures:
-- Proper sequencing of collective operations
-- Unique sequence numbers per source-destination pair
-- Increasing session IDs per rank
-- Correct segmentation for large messages
-- Valid compression flags
-- Proper protocol selection based on message size
-- Checksums for data integrity
-
----
-
-## Statistics
-
-The trace file includes:
-- Total number of packets
-- Packets per operation type
-- Packets per packet type
-- Total data volume (in bytes and MB)
-- Final simulation timestamp
-
----
-
-## Important Notes
-
-- **Byte Order**: All multi-byte fields use **big-endian** (network byte order)
-- **Protocol Number**: `0xACCE` identifies ACCL packets
-- **Checksum**: Calculated as sum of all header+payload bytes mod 2³²
-- **Payload Data**: Randomly generated for simulation purposes
-- **Timestamps**: Simulated based on packet size and transfer time
-- **Compression**: Randomly applied to demonstrate flag usage
-- **Memory**: Host/device memory placement is randomly selected
-- **Protocol Constraints**: The trace respects ACCL protocol rules (e.g., rendezvous for large messages)
-
----
-
-## License
-
-Refer to the main ACCL project license.
