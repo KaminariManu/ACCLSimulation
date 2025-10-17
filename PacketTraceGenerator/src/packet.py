@@ -115,8 +115,16 @@ class Packet:
         return header + payload
     
     def _generate_payload(self) -> bytes:
-        """Generate payload data (random for simulation purposes)"""
-        # Generate random payload data
+        """Generate payload data (random for simulation purposes)
+        
+        For RDMA packets (RNDZV_DATA), we don't generate actual payload since
+        it would be transferred directly via DMA in hardware, not through packet buffers.
+        """
+        # Skip payload generation for RDMA packets (they use DMA, not packet payload)
+        if self.packet_type == PacketType.RNDZV_DATA:
+            return bytes(self.data_length)  # Zero-filled placeholder (fast)
+        
+        # Generate random payload data for regular packets
         # In real implementation, this would be actual application data
         return bytes([random.randint(0, 255) for _ in range(self.data_length)])
     

@@ -136,19 +136,39 @@ readable = str(p)           # Human-readable
 
 **Packet Structure:**
 - **Header:** 64 bytes, all fields in network byte order (big-endian)
-- **Payload:** Variable length (up to 4KB per segment)
+- **Payload:** Variable length (up to 4KB per segment for regular packets)
 - **Checksum:** Simple sum of all bytes (mod 2^32)
 
 **Key Methods:**
 - `to_binary()`: Pack to binary format for simulation
 - `to_hex()`: Convert to hex string for encapsulation
+- `_generate_payload()`: Generate packet payload (optimized for RDMA)
 - `calculate_checksum()`: Compute integrity checksum
 - `__str__()`: Human-readable representation
+
+**Payload Generation Strategy:**
+
+The `_generate_payload()` method uses different strategies based on packet type:
+
+```python
+def _generate_payload(self) -> bytes:
+    # RDMA packets: zero-filled (fast, represents DMA transfer)
+    if self.packet_type == PacketType.RNDZV_DATA:
+        return bytes(self.data_length)  # Zero-filled placeholder
+    
+    # Regular packets: random data for realistic simulation
+    return bytes([random.randint(0, 255) for _ in range(self.data_length)])
+```
+
+**Rationale:**
+- **RDMA packets (`RNDZV_DATA`):** Represent logical direct memory access operations that bypass packet buffers. The payload is not actually transmitted through packet processing, so we use zero-filled placeholders. This provides significant performance improvement for large message traces.
+- **Regular packets:** Generate random payload data to simulate realistic network traffic patterns.
 
 **Extension Points:**
 - Add custom header fields (update `to_binary()`)
 - Implement alternative checksum algorithms
 - Add encryption/compression layers
+- Customize payload patterns for specific workload simulation
 
 ### 3. `trace_generator.py` (239 lines)
 
@@ -184,6 +204,15 @@ packets = gen.generate_trace(num_operations=100)
    def select_protocol(data_size):
        return EAGER if data_size <= 32768 else RENDEZVOUS
    ```
+   
+   **Eager Protocol:** Messages ≤32KB are sent directly using `DATA_EAGER` packets. Messages >4KB are automatically segmented into multiple packets.
+   
+   **Rendezvous Protocol:** Messages >32KB use a three-phase handshake for RDMA:
+   - Phase 1: Receiver sends `RNDZV_ADDR` packet with buffer address (~32 bytes)
+   - Phase 2: Sender generates `RNDZV_DATA` packet representing RDMA transfer (full message size, NOT segmented)
+   - Phase 3: Sender sends `RNDZV_COMPLETE` notification
+   
+   **IMPORTANT:** `RNDZV_DATA` packets represent logical RDMA operations that bypass packet processing. The `data_length` field contains the full RDMA transfer size (can be >4KB), as these transfers write directly to the destination memory address via DMA hardware.
 
 3. **State Management:**
    - Sequence numbers per connection pair
@@ -890,10 +919,11 @@ generator = ACCLTraceGenerator(num_ranks=4, seed=42)
 #### Packet Segmentation (CRITICAL)
 - **Always Use Segmentation Helper:** When implementing new collective operations, ALWAYS use `generate_collective_packet_segments()` for messages that may exceed `max_packet_size`
 - **Never Create Large Packets Directly:** Creating packets with `data_length > max_packet_size` will cause failures in the C packet processor
-- **Validate Packet Sizes:** Ensure all generated packets respect the hardware constraint (default: 4096 bytes)
+- **RDMA Exception:** `RNDZV_DATA` packets are exempt from the 4096-byte limit. These packets represent logical RDMA transfers that bypass packet buffers and write directly to memory addresses. The `data_length` field for RDMA packets contains the full transfer size.
+- **Validate Packet Sizes:** Ensure all non-RDMA generated packets respect the hardware constraint (default: 4096 bytes)
 
 ```python
-# CORRECT: Use segmentation helper
+# CORRECT: Use segmentation helper for regular packets
 def generate_my_collective(generator):
     data_size = random.randint(1000, 64000)  # May exceed max_packet_size
     for dst in range(generator.num_ranks):
@@ -904,10 +934,25 @@ def generate_my_collective(generator):
         )
         packets.extend(segments)
 
-# INCORRECT: Direct packet creation without segmentation
+# CORRECT: RDMA packets can be large (logical DMA operation)
+def generate_rendezvous_send(self, src, dst, size, tag):
+    # ... RNDZV_ADDR packet ...
+    
+    # RDMA data packet - represents logical DMA transfer
+    rdma_packet = Packet(
+        packet_type=PacketType.RNDZV_DATA,
+        data_length=size,  # OK: Can be > 4096 for RDMA
+        address=destination_address,
+        # ... other fields
+    )
+    
+    # ... RNDZV_COMPLETE packet ...
+
+# INCORRECT: Direct packet creation without segmentation for regular packets
 def generate_my_collective_wrong(generator):
     data_size = random.randint(1000, 64000)  # May exceed max_packet_size!
     packet = Packet(
+        packet_type=PacketType.COLLECTIVE_DATA,  # Regular packet
         data_length=data_size,  # ERROR: Could be > 4096 bytes
         # ... other fields
     )

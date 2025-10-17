@@ -205,20 +205,26 @@ Each ACCL packet is preceded by a 64-byte header containing metadata essential f
 ### 5.2. Communication Protocols
 
 -   **Eager Protocol:** For messages up to the `eager-threshold`, data is sent directly in one or more `DATA_EAGER` packets. Messages larger than `max-packet-size` are automatically segmented into multiple packets.
--   **Rendezvous Protocol:** For larger messages, a three-phase handshake is used:
-    1.  The receiver sends its memory buffer address to the sender in an `RNDZV_ADDR` packet.
-    2.  The sender performs an RDMA write and sends the data in an `RNDZV_DATA` packet.
-    3.  The sender concludes the transfer with an `RNDZV_COMPLETE` notification.
+-   **Rendezvous Protocol:** For larger messages (> 32KB), a three-phase handshake is used:
+    1.  The receiver sends its memory buffer address to the sender in an `RNDZV_ADDR` packet (control packet, ~32 bytes).
+    2.  The sender performs an RDMA write directly to the receiver's memory, represented by an `RNDZV_DATA` packet containing the full message size. **RDMA packets are NOT segmented** because they represent logical direct memory access operations that bypass packet buffers and write directly to the destination memory address. The `data_length` field contains the full RDMA transfer size.
+    3.  The sender concludes the transfer with an `RNDZV_COMPLETE` notification (control packet).
 
 **Packet Segmentation:**
 
-All communication operations (point-to-point and collective) automatically segment large messages into chunks that respect the `max-packet-size` limit (default: 4096 bytes). This ensures compatibility with realistic network hardware constraints:
+Communication operations use different segmentation strategies based on the protocol:
 
-- **Point-to-Point Operations:** Eager send/recv operations segment messages using the `DATA_EAGER` packet type with proper segment numbering.
-- **Collective Operations:** All collectives (broadcast, scatter, gather, reduce, allgather, allreduce, reduce-scatter, and alltoall) use the `COLLECTIVE_DATA` packet type and segment their data transfers when necessary.
-- **Segment Tracking:** Each packet header contains the current segment number (`payload_segment`) and total number of segments (`total_segments`) to enable proper reassembly at the receiver.
+- **Eager Protocol (Point-to-Point):** Messages are automatically segmented into chunks that respect the `max-packet-size` limit (default: 4096 bytes). Each segment uses the `DATA_EAGER` packet type with proper segment numbering (`payload_segment` and `total_segments`).
+- **Rendezvous Protocol (Point-to-Point):** Control packets (`RNDZV_ADDR`, `RNDZV_COMPLETE`) are small. The `RNDZV_DATA` packet represents a logical RDMA operation and is **not segmented** - it contains the full transfer size in the `data_length` field, as RDMA transfers bypass packet processing and write directly to memory.
+- **Collective Operations:** All collectives (broadcast, scatter, gather, reduce, allgather, allreduce, reduce-scatter, and alltoall) use the `COLLECTIVE_DATA` packet type and segment their data transfers to respect the `max-packet-size` limit.
+- **Collective with Rendezvous:** Large broadcasts may use the rendezvous protocol with RDMA for efficiency. In this case, the address exchange uses control packets, and the RDMA transfer is represented as a single `RNDZV_DATA` packet.
 
-This segmentation is handled transparently by the generator and ensures that all generated packets conform to the specified maximum packet size, making the traces suitable for hardware simulation and actual network deployment.
+**Payload Generation:**
+
+- **Regular packets:** Generate random payload data for simulation purposes
+- **RDMA packets (`RNDZV_DATA`):** Use zero-filled placeholders instead of random data, as RDMA transfers would occur via DMA hardware, not through packet buffers. This significantly improves trace generation performance for large message scenarios.
+
+This design accurately models how data flows in real ACCL hardware: small messages and control information go through packet processing, while large data transfers use RDMA for zero-copy efficiency.
 
 ### 5.3. Operation Weight Distribution
 
