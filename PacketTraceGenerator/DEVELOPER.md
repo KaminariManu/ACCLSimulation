@@ -303,6 +303,56 @@ For comprehensive documentation on customizing operation weights, including deta
 9. **Alltoall** (`generate_alltoall`):
    - Pattern: All-to-all exchange
    - Personalized communication
+   - Uses segmentation for large messages
+
+**Packet Segmentation:**
+
+All collective operations MUST properly segment large messages to respect the `max_packet_size` limit (default: 4096 bytes). The generator provides a helper function for this:
+
+```python
+def generate_collective_packet_segments(generator, operation, src, dst, 
+                                       total_size, tag, session_id):
+    """Helper to generate segmented packets for collective operations.
+    
+    Automatically breaks large data into MAX_PACKETSIZE chunks to match
+    hardware constraints. Each packet includes proper segment numbering.
+    
+    Args:
+        generator: ACCLTraceGenerator instance
+        operation: AcclOperation type
+        src: Source rank
+        dst: Destination rank
+        total_size: Total message size in bytes
+        tag: Message tag
+        session_id: Session identifier
+    
+    Returns:
+        List of segmented Packet objects
+    """
+    packets = []
+    num_segments = (total_size + generator.max_packet_size - 1) // generator.max_packet_size
+    
+    for seg in range(num_segments):
+        seg_size = min(generator.max_packet_size, total_size - seg * generator.max_packet_size)
+        packet = Packet(
+            packet_type=AcclPacketType.COLLECTIVE_DATA,
+            operation=operation,
+            src_rank=src,
+            dst_rank=dst,
+            tag=tag,
+            session_id=session_id,
+            sequence_num=generator.next_sequence(src, dst),
+            data_length=seg_size,
+            payload_segment=seg,
+            total_segments=num_segments,
+            # ... other fields
+        )
+        packets.append(packet)
+    
+    return packets
+```
+
+**IMPORTANT:** When implementing new collective operations, always use the segmentation helper for messages that may exceed `max_packet_size`. Direct packet creation without segmentation will cause failures in the C packet processor.
 
 **Implementation Pattern:**
 
@@ -319,13 +369,18 @@ def generate_my_collective(generator):
     packets = []
     root = random.randint(0, generator.num_ranks - 1)
     data_size = random.randint(1024, 32768)
-    session_id = generator.next_session_id()
+    tag = generator.TAG_ANY
     
-    # Implement communication pattern
+    # For each communication pair, use segmentation helper
     for rank in range(generator.num_ranks):
         if rank != root:
-            packet = create_packet(...)
-            packets.append(packet)
+            session_id = generator.next_session_id(root)
+            # Use segmentation helper to ensure packets don't exceed max size
+            segments = generate_collective_packet_segments(
+                generator, AcclOperation.MY_OPERATION, 
+                root, rank, data_size, tag, session_id
+            )
+            packets.extend(segments)
     
     return packets
 ```
@@ -819,6 +874,33 @@ packets = gen.generate_trace(50)
 ```python
 # Example: Always use seeds in tests
 generator = ACCLTraceGenerator(num_ranks=4, seed=42)
+```
+
+#### Packet Segmentation (CRITICAL)
+- **Always Use Segmentation Helper:** When implementing new collective operations, ALWAYS use `generate_collective_packet_segments()` for messages that may exceed `max_packet_size`
+- **Never Create Large Packets Directly:** Creating packets with `data_length > max_packet_size` will cause failures in the C packet processor
+- **Validate Packet Sizes:** Ensure all generated packets respect the hardware constraint (default: 4096 bytes)
+
+```python
+# CORRECT: Use segmentation helper
+def generate_my_collective(generator):
+    data_size = random.randint(1000, 64000)  # May exceed max_packet_size
+    for dst in range(generator.num_ranks):
+        session_id = generator.next_session_id(0)
+        # Segmentation helper handles large messages automatically
+        segments = generate_collective_packet_segments(
+            generator, AcclOperation.MY_OP, 0, dst, data_size, tag, session_id
+        )
+        packets.extend(segments)
+
+# INCORRECT: Direct packet creation without segmentation
+def generate_my_collective_wrong(generator):
+    data_size = random.randint(1000, 64000)  # May exceed max_packet_size!
+    packet = Packet(
+        data_length=data_size,  # ERROR: Could be > 4096 bytes
+        # ... other fields
+    )
+    # This will fail in the C processor if data_size > max_packet_size
 ```
 
 #### Code Organization

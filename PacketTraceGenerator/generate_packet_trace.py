@@ -659,26 +659,16 @@ class ACCLTraceGenerator:
         chunk_size = random.randint(500, 4000)
         tag = self.TAG_ANY
         
-        # Each rank sends to every other rank
+        # Each rank sends to every other rank (with proper segmentation)
         for src in range(self.num_ranks):
             for dst in range(self.num_ranks):
                 if src != dst:
-                    packet = Packet(
-                        timestamp=self.timestamp,
-                        packet_type=PacketType.COLLECTIVE_DATA,
-                        operation=Operation.ALLTOALL,
-                        src_rank=src,
-                        dst_rank=dst,
-                        tag=tag,
-                        session_id=self.get_next_session_id(src),
-                        sequence_number=self.get_next_sequence(src, dst),
-                        data_length=chunk_size,
-                        compression=0,
-                        is_host_memory=False
+                    session_id = self.get_next_session_id(src)
+                    # Use segmentation helper to ensure packets don't exceed MAX_PACKETSIZE
+                    segments = self.generate_collective_packet_segments(
+                        Operation.ALLTOALL, src, dst, chunk_size, tag, session_id
                     )
-                    packets.append(packet)
-            
-            self.advance_time(chunk_size // 32)
+                    packets.extend(segments)
         
         return packets
     

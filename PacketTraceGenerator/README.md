@@ -5,7 +5,8 @@
 
 
 
-The ACCL Packet Trace Generator is a configurable software tool designed to produce realistic network traffic traces based on the Alveo Collective Communication Library (ACCL) protocol. It supports a comprehensive set of point-to-point and collective communication operations.
+The ACCL Packet Trace Generator is a configurable software tool designed to produce realistic network traffic traces based on the Alveo Collective Communication Library (ACCL) protocol. It supports a comprehensive set of point-to-point and collective communication operations, with automatic packet segmentation to respect hardware constraints (default: 4096-byte maximum packet size).
+
 The generator is implemented in Python 3 and is available in two versions: a modular, extensible version and a legacy single-file script. Both versions produce identical, byte-accurate output traces in multiple formats suitable for a range of simulation and analysis tools.
 
 
@@ -201,11 +202,21 @@ Each ACCL packet is preceded by a 64-byte header containing metadata essential f
 
 ### 5.2. Communication Protocols
 
--   **Eager Protocol:** For messages up to the `eager-threshold`, data is sent directly in one or more `DATA_EAGER` packets. Messages larger than `max-packet-size` are segmented.
+-   **Eager Protocol:** For messages up to the `eager-threshold`, data is sent directly in one or more `DATA_EAGER` packets. Messages larger than `max-packet-size` are automatically segmented into multiple packets.
 -   **Rendezvous Protocol:** For larger messages, a three-phase handshake is used:
     1.  The receiver sends its memory buffer address to the sender in an `RNDZV_ADDR` packet.
     2.  The sender performs an RDMA write and sends the data in an `RNDZV_DATA` packet.
     3.  The sender concludes the transfer with an `RNDZV_COMPLETE` notification.
+
+**Packet Segmentation:**
+
+All communication operations (point-to-point and collective) automatically segment large messages into chunks that respect the `max-packet-size` limit (default: 4096 bytes). This ensures compatibility with realistic network hardware constraints:
+
+- **Point-to-Point Operations:** Eager send/recv operations segment messages using the `DATA_EAGER` packet type with proper segment numbering.
+- **Collective Operations:** All collectives (broadcast, scatter, gather, reduce, allgather, allreduce, reduce-scatter, and alltoall) use the `COLLECTIVE_DATA` packet type and segment their data transfers when necessary.
+- **Segment Tracking:** Each packet header contains the current segment number (`payload_segment`) and total number of segments (`total_segments`) to enable proper reassembly at the receiver.
+
+This segmentation is handled transparently by the generator and ensures that all generated packets conform to the specified maximum packet size, making the traces suitable for hardware simulation and actual network deployment.
 
 ### 5.3. Operation Weight Distribution
 
