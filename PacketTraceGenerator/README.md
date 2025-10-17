@@ -133,10 +133,12 @@ python main.py --help
     
     **Note:** Weights are relative values that determine the probability distribution of operations. The actual percentage for each operation is calculated as `(weight / sum_of_all_weights) × 100`. Default values simulate a typical general-purpose HPC/ML workload.
 -   **Output Configuration:**
-    -   `--output-all`: Directory for storing the complete network trace.
-    -   `--output-node`: Directory for storing a trace filtered for a single node.
+    -   `--output-all`: Directory for storing the complete network trace (default: `output_all_nodes`).
+    -   `--output-node`: Directory for storing a trace filtered for a single node (default: `output_single_node`).
     -   `--node`: The specific rank for which to generate a single-node trace.
     -   `--skip-binary`, `--skip-hex`: Flags to disable generation of specific output formats.
+    
+    **Important:** The generator automatically cleans (removes and recreates) the output directories before each run to ensure fresh trace generation without stale files. Additionally, the `src/__pycache__/` directory is cleaned to prevent issues with outdated bytecode.
 
 **Example with Custom Parameters:**
 

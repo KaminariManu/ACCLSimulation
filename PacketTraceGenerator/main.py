@@ -15,6 +15,7 @@ Example:
 
 import os
 import sys
+import shutil
 
 # Import modular components from src folder
 from src.cli import parse_arguments, print_configuration, print_summary, print_verbose_samples, get_operation_weights
@@ -45,8 +46,21 @@ def main():
     OUTPUT_DIR_ALL = args.output_all
     OUTPUT_DIR_NODE = args.output_node
     
-    os.makedirs(OUTPUT_DIR_ALL, exist_ok=True)
-    os.makedirs(OUTPUT_DIR_NODE, exist_ok=True)
+    # Clean output directories and pycache before generation
+    print("Cleaning output directories...")
+    for output_dir in [OUTPUT_DIR_ALL, OUTPUT_DIR_NODE]:
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+            print(f"  Removed: {output_dir}/")
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"  Created: {output_dir}/")
+    
+    # Clean Python cache files in src directory
+    pycache_dir = os.path.join("src", "__pycache__")
+    if os.path.exists(pycache_dir):
+        shutil.rmtree(pycache_dir)
+        print(f"  Removed: {pycache_dir}/")
+    print()
     
     # Define output files with directory paths
     OUTPUT_FILE = os.path.join(OUTPUT_DIR_ALL, "accl_packet_trace.txt")

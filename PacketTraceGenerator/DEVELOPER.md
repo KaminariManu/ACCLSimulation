@@ -519,6 +519,9 @@ def main():
     # Parse arguments
     args = parse_arguments()
     
+    # Clean output directories
+    # (Automatically removes and recreates output directories)
+    
     # Create generator
     generator = ACCLTraceGenerator(...)
     
@@ -533,11 +536,19 @@ def main():
 
 **Flow:**
 1. Parse command-line arguments
-2. Create generator with configuration
-3. Generate packet trace
-4. Filter for single node (if requested)
-5. Write all output formats
-6. Create output directories
+2. **Automatically clean output directories** (`output_all_nodes/`, `output_single_node/`) and Python cache (`src/__pycache__/`)
+3. Create generator with configuration
+4. Generate packet trace
+5. Filter for single node (if requested)
+6. Write all output formats
+
+**Directory Cleanup Behavior:**
+The generator automatically performs the following cleanup operations at the start of each run:
+- Removes and recreates `output_all_nodes/` directory
+- Removes and recreates `output_single_node/` directory  
+- Removes `src/__pycache__/` directory to prevent stale bytecode issues
+
+This ensures fresh trace generation without interference from previous runs and prevents issues with cached Python modules.
 
 **Extension Points:**
 - Add pipeline stages (validation, optimization)
